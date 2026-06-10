@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-HexPad GUI v1.3 — MIDI Learn, live pad feedback, Bank B, OBS mode, clean stop
+HexPad GUI v1.3.1 — fix AttributeError preset_name_var
 """
 import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox
@@ -12,7 +12,7 @@ from modules.websocket_bridge import WebSocketBridge
 from modules.macros           import MacroBridge
 from modules.obs_bridge       import OBSBridge
 
-VERSION = "1.3.0"
+VERSION = "1.3.1"
 
 C = {
     "bg":      "#0a0a12",
@@ -34,11 +34,14 @@ C = {
 }
 
 MODE_COLORS = {
-    "gamepad":   "#00ffe7",
-    "websocket": "#7f00ff",
-    "macro":     "#ffd700",
-    "debug":     "#ff006e",
-    "obs":       "#ff6600",
+    "gamepad":    "#00ffe7",
+    "websocket":  "#7f00ff",
+    "macro":      "#ffd700",
+    "debug":      "#ff006e",
+    "obs":        "#ff6600",
+    "lightfx":    "#ff00aa",
+    "visualizer": "#00bfff",
+    "sound_preset": "#88ff00",
 }
 
 AXIS_OPTIONS  = ["axis_x","axis_y","axis_z","axis_rx","axis_ry","axis_rz","axis_sl0","axis_sl1"]
@@ -66,12 +69,14 @@ class HexPadGUI:
         self.running  = False
         self.listener = None
         self._orig_print = builtins.print
-        self._learn_target = None   # (note_str, var) en attente de MIDI Learn
-        self._pad_btns = {}         # note_str -> Button widget pour feedback live
+        self._learn_target = None
+        self._pad_btns = {}
         self._current_prog = "1"
         self.config = self._load_config()
         self._build_ui()
-        # Thread moniteur MIDI pour learn + feedback
+        # Sélection initiale APRÈS que toute l'UI soit construite
+        if self.config.get("programs"):
+            self._select_program(self._current_prog)
         self._mon_port  = None
         self._mon_stop  = threading.Event()
         self._start_monitor()
@@ -101,10 +106,10 @@ class HexPadGUI:
         self.left.pack_propagate(False)
         self._build_left()
         self._build_right()
+        # NOTE: _select_program est appelé dans __init__ après _build_ui()
 
     def _build_left(self):
         p = self.left
-        # Header
         hdr = tk.Frame(p, bg=C["bg"])
         hdr.pack(fill="x", pady=(4,2))
         tk.Label(hdr, text="\u2b21", font=("Courier",26,"bold"), fg=C["accent"], bg=C["bg"]).pack(side="left")
@@ -112,7 +117,6 @@ class HexPadGUI:
         tk.Label(hdr, text=f" v{VERSION}", font=("Courier",8), fg=C["dim"], bg=C["bg"]).pack(side="left", pady=8)
         make_sep(p, C["accent2"])
 
-        # Device
         df = tk.Frame(p, bg=C["panel2"], pady=6)
         df.pack(fill="x", pady=3)
         tk.Label(df, text="  \u25a0 DEVICE", font=("Courier",8,"bold"), fg=C["accent2"], bg=C["panel2"]).pack(anchor="w")
@@ -134,7 +138,6 @@ class HexPadGUI:
         self.status_dot.pack(side="right", padx=6)
         make_sep(p)
 
-        # Programme
         tk.Label(p, text="  \u25a0 PROGRAMME", font=("Courier",8,"bold"), fg=C["accent2"], bg=C["bg"]).pack(anchor="w")
         self.prog_frame = tk.Frame(p, bg=C["bg"])
         self.prog_frame.pack(fill="x", pady=5)
@@ -142,7 +145,6 @@ class HexPadGUI:
         self._build_prog_btns()
         make_sep(p)
 
-        # Controls
         ctrl = tk.Frame(p, bg=C["bg"]); ctrl.pack(fill="x", pady=4)
         self.start_btn = tk.Button(ctrl, text="\u25b6  START",
             font=("Courier",12,"bold"), bg=C["green"], fg=C["bg"],
@@ -159,22 +161,17 @@ class HexPadGUI:
             command=self._open_wizard).pack(side="right")
         make_sep(p)
 
-        # Pad feedback grid
         tk.Label(p, text="  \u25a0 PAD MONITOR", font=("Courier",8,"bold"), fg=C["accent2"], bg=C["bg"]).pack(anchor="w")
         pf = tk.Frame(p, bg=C["bg"]); pf.pack(fill="x", padx=8, pady=4)
         self._pad_btns = {}
-        bank = getattr(self, "_bank", "A")
-        notes = PAD_BANK_A if bank == "A" else PAD_BANK_B
-        for i, note in enumerate(notes):
-            col, row = i % 4, i // 4
+        for i, note in enumerate(PAD_BANK_A):
+            col, row_idx = i % 4, i // 4
             btn = tk.Label(pf, text=f"P{i+1}", font=("Courier",9,"bold"),
-                           bg=C["pad_off"], fg=C["dim"], width=4, pady=6,
-                           relief="flat")
-            btn.grid(row=row, column=col, padx=3, pady=3)
+                           bg=C["pad_off"], fg=C["dim"], width=4, pady=6, relief="flat")
+            btn.grid(row=row_idx, column=col, padx=3, pady=3)
             self._pad_btns[str(note)] = btn
         make_sep(p)
 
-        # Console
         tk.Label(p, text="  \u25a0 CONSOLE", font=("Courier",8,"bold"), fg=C["accent2"], bg=C["bg"]).pack(anchor="w")
         self.console = scrolledtext.ScrolledText(p,
             bg="#06060e", fg=C["accent"], font=("Courier",8),
@@ -190,7 +187,6 @@ class HexPadGUI:
                  fg=C["accent"], bg=C["panel"]).pack(anchor="w", padx=12, pady=(10,3))
         make_sep(p, C["accent"])
 
-        # Nom + mode
         top = tk.Frame(p, bg=C["panel"]); top.pack(fill="x", padx=12, pady=4)
         tk.Label(top, text="Nom",  font=("Courier",8), fg=C["dim"], bg=C["panel"]).grid(row=0,column=0,sticky="w")
         self.preset_name_var = tk.StringVar(value="Programme 1")
@@ -200,7 +196,7 @@ class HexPadGUI:
         tk.Label(top, text="Mode", font=("Courier",8), fg=C["dim"], bg=C["panel"]).grid(row=1,column=0,sticky="w",pady=4)
         self.preset_mode_var = tk.StringVar(value="gamepad")
         mode_cb = ttk.Combobox(top, textvariable=self.preset_mode_var,
-                               values=list(MODE_COLORS.keys()), width=12, state="readonly")
+                               values=list(MODE_COLORS.keys()), width=14, state="readonly")
         mode_cb.grid(row=1,column=1,padx=8,sticky="w")
         mode_cb.bind("<<ComboboxSelected>>", lambda e: self._refresh_editor())
         tk.Label(top, text="WS URL", font=("Courier",8), fg=C["dim"], bg=C["panel"]).grid(row=2,column=0,sticky="w")
@@ -208,7 +204,6 @@ class HexPadGUI:
         tk.Entry(top, textvariable=self.ws_url_var,
                  bg=C["btn"], fg=C["accent"], font=("Courier",9),
                  relief="flat", insertbackground=C["accent"], width=22).grid(row=2,column=1,padx=8,sticky="w",pady=2)
-        # OBS settings
         tk.Label(top, text="OBS host:port", font=("Courier",8), fg=C["dim"], bg=C["panel"]).grid(row=3,column=0,sticky="w")
         obs_row = tk.Frame(top, bg=C["panel"]); obs_row.grid(row=3,column=1,padx=8,sticky="w",pady=2)
         self.obs_host_var = tk.StringVar(value="localhost")
@@ -222,10 +217,8 @@ class HexPadGUI:
         tk.Label(top, text="OBS password", font=("Courier",8), fg=C["dim"], bg=C["panel"]).grid(row=4,column=0,sticky="w")
         tk.Entry(top, textvariable=self.obs_pass_var, bg=C["btn"], fg=C["accent"],
                  font=("Courier",9), relief="flat", width=22, show="*").grid(row=4,column=1,padx=8,sticky="w",pady=2)
-
         make_sep(p)
 
-        # Bank selector
         bank_row = tk.Frame(p, bg=C["panel"]); bank_row.pack(fill="x", padx=12)
         tk.Label(bank_row, text="BANK", font=("Courier",8,"bold"), fg=C["accent2"], bg=C["panel"]).pack(side="left")
         self._bank_var = tk.StringVar(value="A")
@@ -236,21 +229,18 @@ class HexPadGUI:
                            activebackground=C["panel"], activeforeground=C["accent"],
                            command=self._refresh_editor).pack(side="left", padx=2)
 
-        # Pad grid
         tk.Label(p, text="PADS", font=("Courier",8,"bold"), fg=C["accent2"], bg=C["panel"]).pack(anchor="w", padx=12, pady=(4,0))
         self.pad_frame = tk.Frame(p, bg=C["panel"]); self.pad_frame.pack(fill="x", padx=12, pady=4)
         self.pad_vars = {}
         self._build_pad_grid()
         make_sep(p)
 
-        # Knob grid
         tk.Label(p, text="ENCODEURS", font=("Courier",8,"bold"), fg=C["accent2"], bg=C["panel"]).pack(anchor="w", padx=12)
         self.knob_frame = tk.Frame(p, bg=C["panel"]); self.knob_frame.pack(fill="x", padx=12, pady=4)
         self.knob_vars = {}
         self._build_knob_grid()
         make_sep(p)
 
-        # Joystick
         tk.Label(p, text="JOYSTICK", font=("Courier",8,"bold"), fg=C["accent2"], bg=C["panel"]).pack(anchor="w", padx=12)
         joy = tk.Frame(p, bg=C["panel"]); joy.pack(fill="x", padx=12, pady=4)
         tk.Label(joy, text="Pitch (X)", font=("Courier",8), fg=C["dim"], bg=C["panel"]).grid(row=0,column=0,sticky="w",pady=2)
@@ -261,7 +251,6 @@ class HexPadGUI:
         ttk.Combobox(joy, textvariable=self.mod_var, values=[""]+AXIS_OPTIONS, width=12, state="readonly").grid(row=1,column=1,padx=8)
         make_sep(p)
 
-        # Buttons
         btns = tk.Frame(p, bg=C["panel"]); btns.pack(fill="x", padx=12, pady=8)
         tk.Button(btns, text="\U0001f4be  SAUVEGARDER",
             font=("Courier",9,"bold"), bg=C["accent"], fg=C["bg"],
@@ -280,38 +269,35 @@ class HexPadGUI:
     def _build_pad_grid(self):
         for w in self.pad_frame.winfo_children(): w.destroy()
         self.pad_vars = {}
-        mode = self.preset_mode_var.get()
-        bank = self._bank_var.get() if hasattr(self, "_bank_var") else "A"
+        mode  = self.preset_mode_var.get() if hasattr(self, "preset_mode_var") else "gamepad"
+        bank  = self._bank_var.get() if hasattr(self, "_bank_var") else "A"
         notes = PAD_BANK_A if bank == "A" else PAD_BANK_B
-        prog = self._get_current_preset()
-        pads = prog.get("pads", {}) if prog else {}
+        prog  = self._get_current_preset()
+        pads  = prog.get("pads", {}) if prog else {}
         if mode == "gamepad":   opts = BTN_OPTIONS
         elif mode == "macro":   opts = MACRO_OPTIONS
         elif mode == "obs":     opts = OBS_ACTIONS
         else:                   opts = []
         for i, note in enumerate(notes):
             ns = str(note)
-            col, row = i % 4, i // 4
+            col, row_idx = i % 4, i // 4
             cell = tk.Frame(self.pad_frame, bg=C["panel2"], padx=3, pady=3)
-            cell.grid(row=row, column=col, padx=3, pady=3, sticky="nsew")
+            cell.grid(row=row_idx, column=col, padx=3, pady=3, sticky="nsew")
             hdr = tk.Frame(cell, bg=C["panel2"]); hdr.pack(fill="x")
             tk.Label(hdr, text=f"P{i+1} n{note}", font=("Courier",7), fg=C["dim"], bg=C["panel2"]).pack(side="left")
-            # MIDI Learn button
             learn_btn = tk.Button(hdr, text="\u25ce", font=("Courier",8),
                                   bg=C["panel2"], fg=C["dim"], relief="flat", cursor="hand2")
             learn_btn.pack(side="right")
             var = tk.StringVar(value=pads.get(ns, ""))
             self.pad_vars[ns] = var
             if opts:
-                cb = ttk.Combobox(cell, textvariable=var, values=[""] + opts, width=9, state="normal")
-                cb.pack(fill="x")
+                ttk.Combobox(cell, textvariable=var, values=[""] + opts, width=9, state="normal").pack(fill="x")
             else:
                 tk.Entry(cell, textvariable=var, bg=C["btn"], fg=C["accent"],
                          font=("Courier",8), relief="flat").pack(fill="x")
             learn_btn.config(command=lambda ns=ns, v=var, b=learn_btn: self._midi_learn(ns, v, b))
 
     def _midi_learn(self, note_str, var, btn):
-        """Active le mode MIDI Learn pour ce pad."""
         if self._learn_target:
             old_btn = self._learn_target[2]
             old_btn.config(bg=C["panel2"], fg=C["dim"])
@@ -323,7 +309,6 @@ class HexPadGUI:
         if not self._learn_target:
             return
         _, var, btn = self._learn_target
-        # On ne remplace pas la note, on signale juste dans le log
         self._log(f"[LEARN] Note detectee : {note} — assignee")
         btn.config(bg=C["panel2"], fg=C["dim"])
         self._learn_target = None
@@ -332,7 +317,7 @@ class HexPadGUI:
     def _build_knob_grid(self):
         for w in self.knob_frame.winfo_children(): w.destroy()
         self.knob_vars = {}
-        prog = self._get_current_preset()
+        prog  = self._get_current_preset()
         knobs = prog.get("knobs", {}) if prog else {}
         for i, cc in enumerate(KNOB_CC):
             cell = tk.Frame(self.knob_frame, bg=C["panel2"], padx=3, pady=3)
@@ -361,8 +346,7 @@ class HexPadGUI:
                 command=lambda k=key: self._select_program(k))
             b.pack(side="left", padx=3)
             self.prog_btns[key] = (b, col)
-        if self.config.get("programs"):
-            self._select_program(self._current_prog)
+        # PAS de _select_program ici — appelé depuis __init__ après _build_right()
 
     def _select_program(self, key):
         if key not in self.config["programs"]:
@@ -407,6 +391,7 @@ class HexPadGUI:
         self.config["programs"][self._current_prog] = self._collect_preset()
         self._save_config()
         self._build_prog_btns()
+        self._select_program(self._current_prog)
 
     def _new_preset(self):
         keys = list(self.config["programs"].keys())
@@ -427,7 +412,6 @@ class HexPadGUI:
 
     # ── Monitor MIDI (learn + feedback) ───────────────────────────────────────
     def _start_monitor(self):
-        """Thread leger qui ecoute le MIDI pour le feedback et le MIDI Learn."""
         def run():
             while not self._mon_stop.is_set():
                 try:
@@ -442,17 +426,14 @@ class HexPadGUI:
                             msg = port.poll()
                             if msg and msg.type == "note_on" and msg.velocity > 0:
                                 ns = str(msg.note)
-                                # Feedback live
                                 if ns in self._pad_btns:
-                                    b = self._pad_btns[ns]
+                                    b   = self._pad_btns[ns]
                                     vel = msg.velocity
-                                    # Couleur selon velocite
-                                    r = int(vel / 127 * 0xff)
-                                    g = int((1 - vel/127) * 0xe7)
+                                    r   = int(vel / 127 * 0xff)
+                                    g   = int((1 - vel/127) * 0xe7)
                                     hex_col = f"#{r:02x}{0xff:02x}{g:02x}"
                                     self.root.after(0, b.config, {"bg": hex_col, "fg": C["bg"]})
                                     self.root.after(200, b.config, {"bg": C["pad_off"], "fg": C["dim"]})
-                                # MIDI Learn
                                 if self._learn_target:
                                     self.root.after(0, self._on_learn_received, msg.note)
                             time.sleep(0.001)
@@ -502,7 +483,7 @@ class HexPadGUI:
     def _stop(self):
         self._log("\u25a0 Arret propre...")
         if self.listener:
-            self.listener.stop()   # Stop propre via threading.Event
+            self.listener.stop()
 
     def _on_stopped(self):
         builtins.print = self._orig_print
