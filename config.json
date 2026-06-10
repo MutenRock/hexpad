@@ -1,0 +1,16 @@
+{
+  "device_name": "MPK mini 3",
+  "programs": {
+    "1": {
+      "mode": "gamepad",
+      "pads": {"36":"btn_1","37":"btn_2","38":"btn_3","39":"btn_4","40":"btn_5","41":"btn_6","42":"btn_7","43":"btn_8"},
+      "knobs": {"70":"axis_x","71":"axis_y","72":"axis_z","73":"axis_rx","74":"axis_ry","75":"axis_rz","76":"axis_sl0","77":"axis_sl1"}
+    },
+    "2": {"mode": "websocket", "ws_url": "ws://localhost:8765"},
+    "3": {
+      "mode": "macro",
+      "pads": {"36":"ctrl+z","37":"ctrl+s","38":"ctrl+c","39":"ctrl+v","40":"ctrl+shift+z","41":"f5","42":"f11","43":"esc"}
+    },
+    "4": {"mode": "debug"}
+  }
+}
