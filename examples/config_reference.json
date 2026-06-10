@@ -1,0 +1,36 @@
+{
+  "_comment": "Config de reference - copie et adapte dans config.json",
+  "device_name": "MPK mini 3 0",
+  "programs": {
+    "1": {
+      "name": "Gamepad",
+      "mode": "gamepad",
+      "pads": {
+        "36": "btn_1", "37": "btn_2", "38": "btn_3", "39": "btn_4",
+        "40": "btn_5", "41": "btn_6", "42": "btn_7", "43": "btn_8"
+      },
+      "knobs": {
+        "70": "axis_z", "71": "axis_rx", "72": "axis_ry", "73": "axis_rz"
+      },
+      "pitchwheel": "axis_x",
+      "modwheel": "axis_y"
+    },
+    "2": {
+      "name": "WebSocket",
+      "mode": "websocket",
+      "ws_url": "ws://localhost:8765"
+    },
+    "3": {
+      "name": "Macros",
+      "mode": "macro",
+      "pads": {
+        "36": "ctrl+z", "37": "ctrl+s", "38": "ctrl+c", "39": "ctrl+v",
+        "40": "ctrl+shift+z", "41": "f5", "42": "f11", "43": "esc"
+      }
+    },
+    "4": {
+      "name": "Debug",
+      "mode": "debug"
+    }
+  }
+}
