@@ -4,4 +4,6 @@ pyvjoy
 websockets
 pynput
 obsws-python
+openrgb-python
+pygame
 pyinstaller

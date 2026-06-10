@@ -13,7 +13,7 @@
         "74": "axis_sl0", "75": "axis_sl1"
       },
       "pitchwheel": "axis_x",
-      "modwheel": "axis_y"
+      "modwheel":   "axis_y"
     },
     "2": {
       "name": "WebSocket",
@@ -47,6 +47,44 @@
         "41": {"action": "toggle_record"},
         "42": {"action": "screenshot"},
         "43": {"action": "toggle_source",  "source": "Webcam"}
+      }
+    },
+    "6": {
+      "name": "RGB",
+      "mode": "lightfx",
+      "backend": "openrgb",
+      "openrgb_host": "localhost",
+      "openrgb_port": 6742,
+      "pads": {
+        "36": {"action": "color",  "r": 255, "g": 0,   "b": 0},
+        "37": {"action": "color",  "r": 0,   "g": 255, "b": 0},
+        "38": {"action": "color",  "r": 0,   "g": 0,   "b": 255},
+        "39": {"action": "color",  "r": 255, "g": 165, "b": 0},
+        "40": {"action": "effect", "effect": "breathing"},
+        "41": {"action": "effect", "effect": "rainbow"},
+        "42": {"action": "off"},
+        "43": {"action": "color",  "r": 255, "g": 0,   "b": 255}
+      }
+    },
+    "7": {
+      "name": "Visualizer",
+      "mode": "visualizer",
+      "show_piano": true,
+      "show_cc": true
+    },
+    "8": {
+      "name": "Sampler",
+      "mode": "sound_preset",
+      "sounds_dir": "sounds",
+      "pads": {
+        "36": {"file": "kick.wav",   "volume": 1.0},
+        "37": {"file": "snare.wav",  "volume": 0.9},
+        "38": {"file": "hihat.wav",  "volume": 0.7},
+        "39": {"file": "clap.wav",   "volume": 0.8},
+        "40": {"file": "bass.wav",   "volume": 1.0, "loop": true},
+        "41": {"file": "melody.wav", "volume": 0.8},
+        "42": {"file": "fx.wav",     "volume": 0.6},
+        "43": {"file": "stop_all"}
       }
     }
   }

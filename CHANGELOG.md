@@ -1,30 +1,39 @@
 # Changelog
 
-## [1.3.0] - 2026-06-10
+## [1.4.0] - 2026-06-10
 
 ### Ajouté
-- `modules/obs_bridge.py` — mode OBS : changer de scène, mute micro, toggle stream/record/source via obs-websocket v5
-- `build_exe.bat` — génère `dist/HexPad.exe` standalone via PyInstaller
-- **MIDI Learn** dans le preset editor — clic sur ◎ puis appuie sur un pad pour capturer la note
-- **Live pad feedback** — les pads du monitor s'allument en couleur (intensité = vélocité) à chaque frappe
-- **Sélecteur Bank A / Bank B** dans le preset editor (notes 36-43 vs 44-51)
-- Config `programme 5 : OBS` ajoutée dans `config.json`
-- `requirements.txt` mis à jour : `obsws-python`, `pyinstaller`
+- `modules/lightfx_bridge.py` — Mode **RGB** : controle couleurs/effets OpenRGB ou AlienFX
+  - Actions : `color` (R/G/B), `effect` (breathing/rainbow/static), `off`
+  - Backend configurable : `openrgb` | `lightfx`
+- `modules/visualizer_bridge.py` — Mode **Visualizer** : fenetre Tkinter ~30fps
+  - Barres de velocite des 8 pads avec fade progressif
+  - Piano roll notes actives
+  - Historique CC (encodeurs/joystick)
+- `modules/sound_preset_bridge.py` — Mode **Sampler** : .wav/.mp3/.ogg via pygame
+  - Volume dynamique selon velocite MIDI
+  - Support loops (stop sur note_off)
+  - Pad `stop_all` pour couper tous les canaux
+- `config.json` : presets 6 (RGB), 7 (Visualizer), 8 (Sampler)
+- `requirements.txt` : + `openrgb-python`, `pygame`
+- `NOTES.md` : architecture, flux de donnees, ideas futures, notes setup
+- `sounds/.gitkeep` : dossier versionne pour les samples
 
-### Corrigé
-- **Stop propre** : `MidiListener` utilise maintenant `port.poll()` + `threading.Event`, le STOP dans la GUI arrête réellement le thread
-- Fermeture de fenêtre propre (`WM_DELETE_WINDOW` hookée)
+## [1.3.0] - 2026-06-10
+### Ajouté
+- Stop propre MidiListener (poll + Event)
+- `modules/obs_bridge.py` (OBS scenes/mute/stream/record)
+- MIDI Learn, live pad feedback, Bank A/B dans la GUI
+- `build_exe.bat` PyInstaller
 
 ## [1.2.0] - 2026-06-10
 ### Ajouté
-- GUI 2 colonnes avec preset editor visuel (pads, knobs, joystick)
-- Boutons sauvegarder / nouveau / supprimer preset
-- Couleurs par mode
+- GUI 2 colonnes avec preset editor visuel
 
 ## [1.1.0] - 2026-06-10
 ### Ajouté
-- `gui.py` Tkinter, `wizard.py`, `launch_gui.bat`
-- Support pitchwheel + modwheel dans gamepad.py
+- `gui.py`, `wizard.py`, `launch_gui.bat`
+- Support pitchwheel + modwheel
 
 ## [1.0.0] - 2026-06-10
 ### Ajouté
