@@ -3,3 +3,5 @@ python-rtmidi
 pyvjoy
 websockets
 pynput
+obsws-python
+pyinstaller

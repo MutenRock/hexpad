@@ -2,6 +2,7 @@
   "device_name": "MPK mini 3 0",
   "programs": {
     "1": {
+      "name": "Gamepad",
       "mode": "gamepad",
       "pads": {
         "36": "btn_1", "37": "btn_2", "38": "btn_3", "39": "btn_4",
@@ -9,19 +10,44 @@
       },
       "knobs": {
         "70": "axis_z", "71": "axis_rx", "72": "axis_ry", "73": "axis_rz",
-        "74": "axis_sl0", "75": "axis_sl1", "76": "axis_sl0", "77": "axis_sl1"
+        "74": "axis_sl0", "75": "axis_sl1"
       },
       "pitchwheel": "axis_x",
       "modwheel": "axis_y"
     },
-    "2": { "mode": "websocket", "ws_url": "ws://localhost:8765" },
+    "2": {
+      "name": "WebSocket",
+      "mode": "websocket",
+      "ws_url": "ws://localhost:8765"
+    },
     "3": {
+      "name": "Macros",
       "mode": "macro",
       "pads": {
         "36": "ctrl+z", "37": "ctrl+s", "38": "ctrl+c", "39": "ctrl+v",
         "40": "ctrl+shift+z", "41": "f5", "42": "f11", "43": "esc"
       }
     },
-    "4": { "mode": "debug" }
+    "4": {
+      "name": "Debug",
+      "mode": "debug"
+    },
+    "5": {
+      "name": "OBS",
+      "mode": "obs",
+      "obs_host": "localhost",
+      "obs_port": 4455,
+      "obs_password": "",
+      "pads": {
+        "36": {"action": "scene",         "scene":  "Scene"},
+        "37": {"action": "scene",         "scene":  "Gaming"},
+        "38": {"action": "scene",         "scene":  "Cam only"},
+        "39": {"action": "toggle_mute",   "source": "Mic/Aux"},
+        "40": {"action": "toggle_stream"},
+        "41": {"action": "toggle_record"},
+        "42": {"action": "screenshot"},
+        "43": {"action": "toggle_source",  "source": "Webcam"}
+      }
+    }
   }
 }
