@@ -1,30 +1,42 @@
 # Changelog
 
-## [1.4.0] - 2026-06-10
+## [1.4.1] - 2026-06-12
 
 ### Ajouté
-- `modules/lightfx_bridge.py` — Mode **RGB** : controle couleurs/effets OpenRGB ou AlienFX
-  - Actions : `color` (R/G/B), `effect` (breathing/rainbow/static), `off`
-  - Backend configurable : `openrgb` | `lightfx`
-- `modules/visualizer_bridge.py` — Mode **Visualizer** : fenetre Tkinter ~30fps
-  - Barres de velocite des 8 pads avec fade progressif
-  - Piano roll notes actives
-  - Historique CC (encodeurs/joystick)
-- `modules/sound_preset_bridge.py` — Mode **Sampler** : .wav/.mp3/.ogg via pygame
-  - Volume dynamique selon velocite MIDI
-  - Support loops (stop sur note_off)
-  - Pad `stop_all` pour couper tous les canaux
-- `config.json` : presets 6 (RGB), 7 (Visualizer), 8 (Sampler)
-- `requirements.txt` : + `openrgb-python`, `pygame`
-- `NOTES.md` : architecture, flux de donnees, ideas futures, notes setup
-- `sounds/.gitkeep` : dossier versionne pour les samples
+- `config.json` : preset 9 **2XKO** (mode macro, layout leverless optimisé)
+  - **Bank A — Combat (8 pads)**
+    - P1 `j` → Light Attack (L)
+    - P2 `k` → Medium Attack (M)
+    - P3 `l` → Heavy Attack (H)
+    - P4 `i` → Throw (L+M)
+    - P5 `m` → Special 1
+    - P6 `u` → Parry
+    - P7 `space` → Dash
+    - P8 `o` → Break
+  - **Bank B — Utilitaires + Mouvement**
+    - P1 `p` → Ultimate
+    - P2 `,` → Special 2
+    - P3 `.` → Tag/Team
+    - P4 `r` → Taunt
+    - P5 `a` → Move Left
+    - P6 `d` → Move Right
+    - P7 `w` → Jump
+    - P8 `s` → Crouch
+  - Contrôles in-game à recaler sur ces touches dans Settings > Controls > Edit Controls
+
+## [1.4.0] - 2026-06-10
+### Ajouté
+- `modules/lightfx_bridge.py`, `visualizer_bridge.py`, `sound_preset_bridge.py`
+- Presets 6 (RGB), 7 (Visualizer), 8 (Sampler)
+- `NOTES.md`, `sounds/.gitkeep`
+
+## [1.3.1] - 2026-06-10
+### Corrigé
+- `gui.py` : AttributeError `preset_name_var` au démarrage
 
 ## [1.3.0] - 2026-06-10
 ### Ajouté
-- Stop propre MidiListener (poll + Event)
-- `modules/obs_bridge.py` (OBS scenes/mute/stream/record)
-- MIDI Learn, live pad feedback, Bank A/B dans la GUI
-- `build_exe.bat` PyInstaller
+- Stop propre MidiListener, `obs_bridge.py`, MIDI Learn, Bank A/B, `build_exe.bat`
 
 ## [1.2.0] - 2026-06-10
 ### Ajouté
@@ -32,10 +44,8 @@
 
 ## [1.1.0] - 2026-06-10
 ### Ajouté
-- `gui.py`, `wizard.py`, `launch_gui.bat`
-- Support pitchwheel + modwheel
+- `gui.py`, `wizard.py`, pitchwheel/modwheel
 
 ## [1.0.0] - 2026-06-10
 ### Ajouté
 - Modes Gamepad, WebSocket, Macros, Debug
-- 4 programmes configurables, fichiers .bat Windows

@@ -86,6 +86,31 @@
         "42": {"file": "fx.wav",     "volume": 0.6},
         "43": {"file": "stop_all"}
       }
+    },
+    "9": {
+      "name": "2XKO",
+      "mode": "macro",
+      "_comment": "Layout leverless optimise 2XKO. Joystick gauche = mouvement (WASD via pitchwheel/modwheel non supporte en macro — utilise les knobs K1-K4 pour Left/Right/Jump/Crouch si besoin). Bank A = combat, Bank B = utilitaires.",
+      "pads": {
+        "36": "j",
+        "37": "k",
+        "38": "l",
+        "39": "i",
+        "40": "m",
+        "41": "u",
+        "42": "space",
+        "43": "o"
+      },
+      "pads_bank_b": {
+        "44": "p",
+        "45": "comma",
+        "46": "period",
+        "47": "r",
+        "48": "a",
+        "49": "d",
+        "50": "w",
+        "51": "s"
+      }
     }
   }
 }
