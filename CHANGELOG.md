@@ -1,28 +1,32 @@
 # Changelog
 
-## [1.4.1] - 2026-06-12
+## [1.5.0] - 2026-06-12
 
 ### Ajouté
-- `config.json` : preset 9 **2XKO** (mode macro, layout leverless optimisé)
-  - **Bank A — Combat (8 pads)**
-    - P1 `j` → Light Attack (L)
-    - P2 `k` → Medium Attack (M)
-    - P3 `l` → Heavy Attack (H)
-    - P4 `i` → Throw (L+M)
-    - P5 `m` → Special 1
-    - P6 `u` → Parry
-    - P7 `space` → Dash
-    - P8 `o` → Break
-  - **Bank B — Utilitaires + Mouvement**
-    - P1 `p` → Ultimate
-    - P2 `,` → Special 2
-    - P3 `.` → Tag/Team
-    - P4 `r` → Taunt
-    - P5 `a` → Move Left
-    - P6 `d` → Move Right
-    - P7 `w` → Jump
-    - P8 `s` → Crouch
-  - Contrôles in-game à recaler sur ces touches dans Settings > Controls > Edit Controls
+- `modules/game_profiles.py` — Gestionnaire de profils par jeu
+  - Charge/sauvegarde `game_profiles.json`
+  - Switch de profil à chaud depuis la GUI
+  - Chaque profil : nom, description, programme lié, combos
+  - API : `profiles.active`, `get_combos()`, `set_combo()`, `add_profile()`
+- `modules/combo_engine.py` — Moteur de macros / combos complexes
+  - Format token : `j,k,l` (séquentiel), `j+k` (simultané), `50` (délai ms)
+  - Touches spéciales : `space`, `enter`, `esc`, `f1-f12`, `ctrl`, `comma`...
+  - Thread dédié par combo, interruptible via `stop()`
+  - Support `loop=true` pour les combos répétitifs
+- `game_profiles.json` — 3 profils prêts à l'emploi
+  - **2XKO** (profil actif) : BnB Light/Heavy, Super S1/S2, Dash, Tag Combo, BnB Extend, Wake Up Super
+  - **SF6** : Drive Rush, Drive Impact, Drive Parry, SA1, SA2, BnB Modern, Throw, OD Special
+  - **Custom** : profil vide à personnaliser
+- `gui.py` v1.5.0
+  - Sélecteur **GAME PROFILE** avec description inline (colonne gauche)
+  - Boutons **COMBOS** générés dynamiquement depuis le profil actif
+  - Hint token macro visible dans le Preset Editor
+  - Bouton **+ NEW** / **×** pour créer/supprimer des profils
+  - `combo_engine.stop()` appelé à la fermeture de fenêtre
+
+## [1.4.1] - 2026-06-12
+### Ajouté
+- Preset 9 **2XKO** (mode macro, layout leverless)
 
 ## [1.4.0] - 2026-06-10
 ### Ajouté

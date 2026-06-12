@@ -1,0 +1,122 @@
+{
+  "active": "2XKO",
+  "profiles": {
+    "2XKO": {
+      "name": "2XKO",
+      "description": "Leverless layout optimise pour 2XKO",
+      "program": "9",
+      "combos": {
+        "bnb_light": {
+          "label": "BnB Light",
+          "sequence": "j,j,k,50,l,80,j+k",
+          "loop": false,
+          "_comment": "L L M 50ms H 80ms Throw"
+        },
+        "bnb_heavy": {
+          "label": "BnB Heavy",
+          "sequence": "j,j,k,50,l,80,l+k",
+          "loop": false,
+          "_comment": "L L M 50ms H 80ms H+M"
+        },
+        "super_s1": {
+          "label": "Super S1",
+          "sequence": "i,50,o",
+          "loop": false,
+          "_comment": "Throw + Break = Super S1"
+        },
+        "super_s2": {
+          "label": "Super S2",
+          "sequence": "k,50,l",
+          "loop": false,
+          "_comment": "M + H = Super S2"
+        },
+        "parry": {
+          "label": "Parry",
+          "sequence": "u",
+          "loop": false
+        },
+        "dash_fwd": {
+          "label": "Dash Avant",
+          "sequence": "d,30,d",
+          "loop": false
+        },
+        "dash_back": {
+          "label": "Dash Arriere",
+          "sequence": "a,30,a",
+          "loop": false
+        },
+        "tag_combo": {
+          "label": "Tag Combo",
+          "sequence": "j,k,50,comma,80,j",
+          "loop": false,
+          "_comment": "L+M tag, puis L pour continuer cote partner"
+        },
+        "bnb_extend": {
+          "label": "BnB Extend",
+          "sequence": "j,j,k,50,l,60,m,80,j+k",
+          "loop": false,
+          "_comment": "BnB Light avec Sp1 en extension"
+        },
+        "wake_up": {
+          "label": "Wake Up Super",
+          "sequence": "50,i,50,o",
+          "loop": false,
+          "_comment": "Delai wake up + Super S1"
+        }
+      }
+    },
+    "SF6": {
+      "name": "Street Fighter 6",
+      "description": "Layout SF6 Modern et Classic",
+      "program": "1",
+      "combos": {
+        "drive_rush": {
+          "label": "Drive Rush",
+          "sequence": "f,f",
+          "loop": false
+        },
+        "drive_impact": {
+          "label": "Drive Impact",
+          "sequence": "hp+hk",
+          "loop": false
+        },
+        "drive_parry": {
+          "label": "Drive Parry",
+          "sequence": "mp+mk",
+          "loop": false
+        },
+        "sa1": {
+          "label": "Super Art 1",
+          "sequence": "lp+mp+hp",
+          "loop": false
+        },
+        "sa2": {
+          "label": "Super Art 2",
+          "sequence": "lk+mk+hk",
+          "loop": false
+        },
+        "bnb_modern": {
+          "label": "BnB Modern",
+          "sequence": "sp,50,mp,50,hp",
+          "loop": false
+        },
+        "throw": {
+          "label": "Throw",
+          "sequence": "lp+lk",
+          "loop": false
+        },
+        "od_special": {
+          "label": "OD Special",
+          "sequence": "mp+sp",
+          "loop": false
+        }
+      }
+    },
+    "Custom": {
+      "name": "Custom",
+      "description": "Profil libre — editez vos propres combos",
+      "program": "1",
+      "combos": {}
+    }
+  }
+}

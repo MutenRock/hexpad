@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-HexPad GUI v1.3.1 — fix AttributeError preset_name_var
+HexPad GUI v1.5.0 — Game Profile selector + Combo Engine + macro token support
 """
 import tkinter as tk
-from tkinter import ttk, scrolledtext, messagebox
+from tkinter import ttk, scrolledtext, messagebox, simpledialog
 import threading, json, mido, sys, os, builtins, time
 from modules.dispatcher       import Dispatcher
 from modules.midi_listener    import MidiListener
@@ -11,8 +11,10 @@ from modules.gamepad          import GamepadBridge
 from modules.websocket_bridge import WebSocketBridge
 from modules.macros           import MacroBridge
 from modules.obs_bridge       import OBSBridge
+from modules.game_profiles    import GameProfiles
+from modules.combo_engine     import ComboEngine
 
-VERSION = "1.3.1"
+VERSION = "1.5.0"
 
 C = {
     "bg":      "#0a0a12",
@@ -31,16 +33,17 @@ C = {
     "pad_on":  "#00ffe7",
     "pad_off": "#1a1a30",
     "learn":   "#ff006e",
+    "combo":   "#ffd700",
 }
 
 MODE_COLORS = {
-    "gamepad":    "#00ffe7",
-    "websocket":  "#7f00ff",
-    "macro":      "#ffd700",
-    "debug":      "#ff006e",
-    "obs":        "#ff6600",
-    "lightfx":    "#ff00aa",
-    "visualizer": "#00bfff",
+    "gamepad":      "#00ffe7",
+    "websocket":    "#7f00ff",
+    "macro":        "#ffd700",
+    "debug":        "#ff006e",
+    "obs":          "#ff6600",
+    "lightfx":      "#ff00aa",
+    "visualizer":   "#00bfff",
     "sound_preset": "#88ff00",
 }
 
@@ -65,23 +68,24 @@ class HexPadGUI:
         self.root.title(f"HexPad v{VERSION}")
         self.root.configure(bg=C["bg"])
         self.root.resizable(True, True)
-        self.root.minsize(780, 680)
-        self.running  = False
-        self.listener = None
-        self._orig_print = builtins.print
+        self.root.minsize(820, 700)
+        self.running       = False
+        self.listener      = None
+        self._orig_print   = builtins.print
         self._learn_target = None
-        self._pad_btns = {}
+        self._pad_btns     = {}
         self._current_prog = "1"
-        self.config = self._load_config()
+        self.config        = self._load_config()
+        self.profiles      = GameProfiles()
+        self.combo_engine  = ComboEngine()
         self._build_ui()
-        # Sélection initiale APRÈS que toute l'UI soit construite
         if self.config.get("programs"):
             self._select_program(self._current_prog)
-        self._mon_port  = None
-        self._mon_stop  = threading.Event()
+        self._sync_profile_to_program()
+        self._mon_stop = threading.Event()
         self._start_monitor()
 
-    # ── Config ────────────────────────────────────────────────────────────────
+    # ── Config ───────────────────────────────────────────────────────────────
     def _load_config(self):
         try:
             with open("config.json") as f:
@@ -99,36 +103,34 @@ class HexPadGUI:
     def _build_ui(self):
         self.main = tk.Frame(self.root, bg=C["bg"])
         self.main.pack(fill="both", expand=True)
-        self.left  = tk.Frame(self.main, bg=C["bg"], width=320)
-        self.right = tk.Frame(self.main, bg=C["panel"], width=420)
+        self.left  = tk.Frame(self.main, bg=C["bg"], width=340)
+        self.right = tk.Frame(self.main, bg=C["panel"], width=460)
         self.left.pack(side="left", fill="both", expand=False, padx=(12,4), pady=12)
         self.right.pack(side="right", fill="both", expand=True, padx=(4,12), pady=12)
         self.left.pack_propagate(False)
         self._build_left()
         self._build_right()
-        # NOTE: _select_program est appelé dans __init__ après _build_ui()
 
+    # ── Colonne gauche ────────────────────────────────────────────────────────
     def _build_left(self):
         p = self.left
-        hdr = tk.Frame(p, bg=C["bg"])
-        hdr.pack(fill="x", pady=(4,2))
+        hdr = tk.Frame(p, bg=C["bg"]); hdr.pack(fill="x", pady=(4,2))
         tk.Label(hdr, text="\u2b21", font=("Courier",26,"bold"), fg=C["accent"], bg=C["bg"]).pack(side="left")
         tk.Label(hdr, text=" HexPad", font=("Courier",18,"bold"), fg=C["text"], bg=C["bg"]).pack(side="left")
         tk.Label(hdr, text=f" v{VERSION}", font=("Courier",8), fg=C["dim"], bg=C["bg"]).pack(side="left", pady=8)
         make_sep(p, C["accent2"])
 
-        df = tk.Frame(p, bg=C["panel2"], pady=6)
-        df.pack(fill="x", pady=3)
+        # Device
+        df = tk.Frame(p, bg=C["panel2"], pady=6); df.pack(fill="x", pady=3)
         tk.Label(df, text="  \u25a0 DEVICE", font=("Courier",8,"bold"), fg=C["accent2"], bg=C["panel2"]).pack(anchor="w")
         row = tk.Frame(df, bg=C["panel2"]); row.pack(fill="x", padx=8)
         self.device_var = tk.StringVar(value=self.config.get("device_name",""))
         devices = mido.get_input_names() or ["Aucun appareil"]
         style = ttk.Style(); style.theme_use("clam")
-        style.configure("Dark.TCombobox",
-            fieldbackground=C["btn"], background=C["btn"],
+        style.configure("Dark.TCombobox", fieldbackground=C["btn"], background=C["btn"],
             foreground=C["accent"], selectbackground=C["accent2"], arrowcolor=C["accent"])
         cb = ttk.Combobox(row, textvariable=self.device_var, values=devices,
-                          width=24, state="readonly", style="Dark.TCombobox")
+                          width=22, state="readonly", style="Dark.TCombobox")
         cb.pack(side="left")
         for d in devices:
             if any(x in d.lower() for x in ("mpk","mini","akai")):
@@ -138,13 +140,36 @@ class HexPadGUI:
         self.status_dot.pack(side="right", padx=6)
         make_sep(p)
 
+        # Game Profile selector
+        gf = tk.Frame(p, bg=C["panel2"], pady=6); gf.pack(fill="x", pady=3)
+        tk.Label(gf, text="  \u25a0 GAME PROFILE", font=("Courier",8,"bold"),
+                 fg=C["combo"], bg=C["panel2"]).pack(anchor="w")
+        grow = tk.Frame(gf, bg=C["panel2"]); grow.pack(fill="x", padx=8)
+        self.profile_var = tk.StringVar(value=self.profiles.active)
+        self.profile_cb  = ttk.Combobox(grow, textvariable=self.profile_var,
+                                        values=self.profiles.names,
+                                        width=14, state="readonly", style="Dark.TCombobox")
+        self.profile_cb.pack(side="left")
+        self.profile_cb.bind("<<ComboboxSelected>>", self._on_profile_changed)
+        tk.Button(grow, text="+ NEW", font=("Courier",8), bg=C["btn"], fg=C["combo"],
+                  relief="flat", padx=5, pady=3, cursor="hand2",
+                  command=self._new_profile).pack(side="left", padx=4)
+        tk.Button(grow, text="\u2715", font=("Courier",8), bg=C["btn"], fg=C["red"],
+                  relief="flat", padx=5, pady=3, cursor="hand2",
+                  command=self._delete_profile).pack(side="left")
+        self.profile_desc = tk.Label(gf, text="", font=("Courier",7), fg=C["dim"],
+                                     bg=C["panel2"], anchor="w")
+        self.profile_desc.pack(fill="x", padx=8, pady=(2,0))
+        make_sep(p)
+
+        # Programme
         tk.Label(p, text="  \u25a0 PROGRAMME", font=("Courier",8,"bold"), fg=C["accent2"], bg=C["bg"]).pack(anchor="w")
-        self.prog_frame = tk.Frame(p, bg=C["bg"])
-        self.prog_frame.pack(fill="x", pady=5)
-        self.prog_btns = {}
+        self.prog_frame = tk.Frame(p, bg=C["bg"]); self.prog_frame.pack(fill="x", pady=5)
+        self.prog_btns  = {}
         self._build_prog_btns()
         make_sep(p)
 
+        # Controls
         ctrl = tk.Frame(p, bg=C["bg"]); ctrl.pack(fill="x", pady=4)
         self.start_btn = tk.Button(ctrl, text="\u25b6  START",
             font=("Courier",12,"bold"), bg=C["green"], fg=C["bg"],
@@ -155,12 +180,18 @@ class HexPadGUI:
             relief="flat", padx=14, pady=9, state="disabled", cursor="hand2",
             command=self._stop)
         self.stop_btn.pack(side="left")
-        tk.Button(ctrl, text="\u2699",
-            font=("Courier",13), bg=C["btn"], fg=C["accent2"],
-            relief="flat", padx=9, pady=8, cursor="hand2",
-            command=self._open_wizard).pack(side="right")
+        tk.Button(ctrl, text="\u2699", font=("Courier",13), bg=C["btn"], fg=C["accent2"],
+                  relief="flat", padx=9, pady=8, cursor="hand2",
+                  command=self._open_wizard).pack(side="right")
         make_sep(p)
 
+        # Combos panel
+        tk.Label(p, text="  \u25a0 COMBOS", font=("Courier",8,"bold"), fg=C["combo"], bg=C["bg"]).pack(anchor="w")
+        self.combo_frame = tk.Frame(p, bg=C["bg"]); self.combo_frame.pack(fill="x", padx=8, pady=4)
+        self._build_combo_buttons()
+        make_sep(p)
+
+        # Pad Monitor
         tk.Label(p, text="  \u25a0 PAD MONITOR", font=("Courier",8,"bold"), fg=C["accent2"], bg=C["bg"]).pack(anchor="w")
         pf = tk.Frame(p, bg=C["bg"]); pf.pack(fill="x", padx=8, pady=4)
         self._pad_btns = {}
@@ -172,15 +203,89 @@ class HexPadGUI:
             self._pad_btns[str(note)] = btn
         make_sep(p)
 
+        # Console
         tk.Label(p, text="  \u25a0 CONSOLE", font=("Courier",8,"bold"), fg=C["accent2"], bg=C["bg"]).pack(anchor="w")
-        self.console = scrolledtext.ScrolledText(p,
-            bg="#06060e", fg=C["accent"], font=("Courier",8),
-            relief="flat", height=10, insertbackground=C["accent"],
-            selectbackground=C["accent2"])
+        self.console = scrolledtext.ScrolledText(p, bg="#06060e", fg=C["accent"],
+            font=("Courier",8), relief="flat", height=8,
+            insertbackground=C["accent"], selectbackground=C["accent2"])
         self.console.pack(fill="both", expand=True, pady=(2,6))
         self.console.config(state="disabled")
         self._log(f"\u2b21 HexPad v{VERSION} ready")
 
+    # ── Combo buttons ────────────────────────────────────────────────────────
+    def _build_combo_buttons(self):
+        for w in self.combo_frame.winfo_children(): w.destroy()
+        combos = self.profiles.get_combos()
+        if not combos:
+            tk.Label(self.combo_frame, text="Aucun combo — editez game_profiles.json",
+                     font=("Courier",7), fg=C["dim"], bg=C["bg"]).pack(anchor="w")
+            return
+        cols = 2
+        for i, (key, combo) in enumerate(combos.items()):
+            col, row_idx = i % cols, i // cols
+            label  = combo.get("label", key)
+            seq    = combo.get("sequence", "")
+            loop   = combo.get("loop", False)
+            btn = tk.Button(self.combo_frame,
+                text=f"\u25b6 {label}",
+                font=("Courier",8,"bold"), bg=C["btn"], fg=C["combo"],
+                relief="flat", padx=6, pady=4, cursor="hand2",
+                command=lambda s=seq, l=loop, lbl=label: self._fire_combo(s, l, lbl))
+            btn.grid(row=row_idx, column=col, padx=2, pady=2, sticky="ew")
+        self.combo_frame.columnconfigure(0, weight=1)
+        self.combo_frame.columnconfigure(1, weight=1)
+
+    def _fire_combo(self, sequence, loop, label):
+        self._log(f"[COMBO] \u25b6 {label} : {sequence}")
+        self.combo_engine.execute(sequence, loop=loop)
+
+    # ── Game Profile logic ──────────────────────────────────────────────────
+    def _on_profile_changed(self, event=None):
+        name = self.profile_var.get()
+        self.profiles.active = name
+        prof = self.profiles.get_profile(name)
+        if prof:
+            desc = prof.get("description", "")
+            self.profile_desc.config(text=desc[:52])
+            prog = prof.get("program", "1")
+            if prog in self.config["programs"]:
+                self._select_program(prog)
+        self._build_combo_buttons()
+        self._log(f"[PROFILE] Profil actif : {name}")
+
+    def _sync_profile_to_program(self):
+        """Met a jour la description du profil affiche au demarrage."""
+        prof = self.profiles.active_profile
+        if prof:
+            self.profile_desc.config(text=prof.get("description", "")[:52])
+        self._build_combo_buttons()
+
+    def _new_profile(self):
+        name = simpledialog.askstring("Nouveau profil", "Nom du profil :",
+                                      parent=self.root)
+        if not name or not name.strip():
+            return
+        name = name.strip()
+        self.profiles.add_profile(name)
+        self.profiles.save()
+        self.profile_cb.config(values=self.profiles.names)
+        self.profile_var.set(name)
+        self._on_profile_changed()
+        self._log(f"[PROFILE] Profil '{name}' cree")
+
+    def _delete_profile(self):
+        name = self.profile_var.get()
+        if name == self.profiles.active:
+            messagebox.showwarning("Suppression", "Selectionne un autre profil d'abord.")
+            return
+        if messagebox.askyesno("Supprimer", f"Supprimer le profil '{name}' ?"):
+            self.profiles.delete_profile(name)
+            self.profiles.save()
+            self.profile_cb.config(values=self.profiles.names)
+            self.profile_var.set(self.profiles.active)
+            self._on_profile_changed()
+
+    # ── Colonne droite ────────────────────────────────────────────────────────
     def _build_right(self):
         p = self.right
         tk.Label(p, text="\u25a0 PRESET EDITOR", font=("Courier",9,"bold"),
@@ -190,9 +295,9 @@ class HexPadGUI:
         top = tk.Frame(p, bg=C["panel"]); top.pack(fill="x", padx=12, pady=4)
         tk.Label(top, text="Nom",  font=("Courier",8), fg=C["dim"], bg=C["panel"]).grid(row=0,column=0,sticky="w")
         self.preset_name_var = tk.StringVar(value="Programme 1")
-        tk.Entry(top, textvariable=self.preset_name_var,
-                 bg=C["btn"], fg=C["accent"], font=("Courier",10),
-                 relief="flat", insertbackground=C["accent"], width=20).grid(row=0,column=1,padx=8,sticky="w")
+        tk.Entry(top, textvariable=self.preset_name_var, bg=C["btn"], fg=C["accent"],
+                 font=("Courier",10), relief="flat", insertbackground=C["accent"],
+                 width=20).grid(row=0,column=1,padx=8,sticky="w")
         tk.Label(top, text="Mode", font=("Courier",8), fg=C["dim"], bg=C["panel"]).grid(row=1,column=0,sticky="w",pady=4)
         self.preset_mode_var = tk.StringVar(value="gamepad")
         mode_cb = ttk.Combobox(top, textvariable=self.preset_mode_var,
@@ -201,9 +306,9 @@ class HexPadGUI:
         mode_cb.bind("<<ComboboxSelected>>", lambda e: self._refresh_editor())
         tk.Label(top, text="WS URL", font=("Courier",8), fg=C["dim"], bg=C["panel"]).grid(row=2,column=0,sticky="w")
         self.ws_url_var = tk.StringVar(value="ws://localhost:8765")
-        tk.Entry(top, textvariable=self.ws_url_var,
-                 bg=C["btn"], fg=C["accent"], font=("Courier",9),
-                 relief="flat", insertbackground=C["accent"], width=22).grid(row=2,column=1,padx=8,sticky="w",pady=2)
+        tk.Entry(top, textvariable=self.ws_url_var, bg=C["btn"], fg=C["accent"],
+                 font=("Courier",9), relief="flat", insertbackground=C["accent"],
+                 width=22).grid(row=2,column=1,padx=8,sticky="w",pady=2)
         tk.Label(top, text="OBS host:port", font=("Courier",8), fg=C["dim"], bg=C["panel"]).grid(row=3,column=0,sticky="w")
         obs_row = tk.Frame(top, bg=C["panel"]); obs_row.grid(row=3,column=1,padx=8,sticky="w",pady=2)
         self.obs_host_var = tk.StringVar(value="localhost")
@@ -216,7 +321,14 @@ class HexPadGUI:
                  font=("Courier",9), relief="flat", width=5).pack(side="left")
         tk.Label(top, text="OBS password", font=("Courier",8), fg=C["dim"], bg=C["panel"]).grid(row=4,column=0,sticky="w")
         tk.Entry(top, textvariable=self.obs_pass_var, bg=C["btn"], fg=C["accent"],
-                 font=("Courier",9), relief="flat", width=22, show="*").grid(row=4,column=1,padx=8,sticky="w",pady=2)
+                 font=("Courier",9), relief="flat", width=22,
+                 show="*").grid(row=4,column=1,padx=8,sticky="w",pady=2)
+
+        # Macro token hint
+        hint = tk.Frame(p, bg=C["panel2"]); hint.pack(fill="x", padx=12, pady=(0,4))
+        tk.Label(hint,
+            text="  Tokens macro : j,k,l  |  j+k (simultanee)  |  50 (delai ms)  |  ctrl+z",
+            font=("Courier",7), fg=C["dim"], bg=C["panel2"]).pack(anchor="w", pady=2)
         make_sep(p)
 
         bank_row = tk.Frame(p, bg=C["panel"]); bank_row.pack(fill="x", padx=12)
@@ -224,20 +336,20 @@ class HexPadGUI:
         self._bank_var = tk.StringVar(value="A")
         for b in ("A","B"):
             tk.Radiobutton(bank_row, text=f"  {b}  ", variable=self._bank_var, value=b,
-                           font=("Courier",9,"bold"),
-                           bg=C["panel"], fg=C["accent"], selectcolor=C["btn"],
-                           activebackground=C["panel"], activeforeground=C["accent"],
+                           font=("Courier",9,"bold"), bg=C["panel"], fg=C["accent"],
+                           selectcolor=C["btn"], activebackground=C["panel"],
+                           activeforeground=C["accent"],
                            command=self._refresh_editor).pack(side="left", padx=2)
 
         tk.Label(p, text="PADS", font=("Courier",8,"bold"), fg=C["accent2"], bg=C["panel"]).pack(anchor="w", padx=12, pady=(4,0))
         self.pad_frame = tk.Frame(p, bg=C["panel"]); self.pad_frame.pack(fill="x", padx=12, pady=4)
-        self.pad_vars = {}
+        self.pad_vars  = {}
         self._build_pad_grid()
         make_sep(p)
 
         tk.Label(p, text="ENCODEURS", font=("Courier",8,"bold"), fg=C["accent2"], bg=C["panel"]).pack(anchor="w", padx=12)
         self.knob_frame = tk.Frame(p, bg=C["panel"]); self.knob_frame.pack(fill="x", padx=12, pady=4)
-        self.knob_vars = {}
+        self.knob_vars  = {}
         self._build_knob_grid()
         make_sep(p)
 
@@ -284,14 +396,16 @@ class HexPadGUI:
             cell = tk.Frame(self.pad_frame, bg=C["panel2"], padx=3, pady=3)
             cell.grid(row=row_idx, column=col, padx=3, pady=3, sticky="nsew")
             hdr = tk.Frame(cell, bg=C["panel2"]); hdr.pack(fill="x")
-            tk.Label(hdr, text=f"P{i+1} n{note}", font=("Courier",7), fg=C["dim"], bg=C["panel2"]).pack(side="left")
+            tk.Label(hdr, text=f"P{i+1} n{note}", font=("Courier",7),
+                     fg=C["dim"], bg=C["panel2"]).pack(side="left")
             learn_btn = tk.Button(hdr, text="\u25ce", font=("Courier",8),
                                   bg=C["panel2"], fg=C["dim"], relief="flat", cursor="hand2")
             learn_btn.pack(side="right")
             var = tk.StringVar(value=pads.get(ns, ""))
             self.pad_vars[ns] = var
             if opts:
-                ttk.Combobox(cell, textvariable=var, values=[""] + opts, width=9, state="normal").pack(fill="x")
+                ttk.Combobox(cell, textvariable=var, values=[""] + opts,
+                             width=9, state="normal").pack(fill="x")
             else:
                 tk.Entry(cell, textvariable=var, bg=C["btn"], fg=C["accent"],
                          font=("Courier",8), relief="flat").pack(fill="x")
@@ -299,17 +413,16 @@ class HexPadGUI:
 
     def _midi_learn(self, note_str, var, btn):
         if self._learn_target:
-            old_btn = self._learn_target[2]
-            old_btn.config(bg=C["panel2"], fg=C["dim"])
+            self._learn_target[2].config(bg=C["panel2"], fg=C["dim"])
         self._learn_target = (note_str, var, btn)
         btn.config(bg=C["learn"], fg="white")
-        self._log(f"[LEARN] Attente signal MIDI... (appuie sur un pad)")
+        self._log("[LEARN] Attente signal MIDI... (appuie sur un pad)")
 
     def _on_learn_received(self, note):
         if not self._learn_target:
             return
         _, var, btn = self._learn_target
-        self._log(f"[LEARN] Note detectee : {note} — assignee")
+        self._log(f"[LEARN] Note {note} detectee")
         btn.config(bg=C["panel2"], fg=C["dim"])
         self._learn_target = None
 
@@ -326,7 +439,8 @@ class HexPadGUI:
                      fg=C["dim"], bg=C["panel2"]).pack()
             var = tk.StringVar(value=knobs.get(str(cc), ""))
             self.knob_vars[str(cc)] = var
-            ttk.Combobox(cell, textvariable=var, values=[""]+AXIS_OPTIONS, width=7, state="normal").pack()
+            ttk.Combobox(cell, textvariable=var, values=[""]+AXIS_OPTIONS,
+                         width=7, state="normal").pack()
 
     # ── Preset logic ──────────────────────────────────────────────────────────
     def _get_current_preset(self):
@@ -346,7 +460,6 @@ class HexPadGUI:
                 command=lambda k=key: self._select_program(k))
             b.pack(side="left", padx=3)
             self.prog_btns[key] = (b, col)
-        # PAS de _select_program ici — appelé depuis __init__ après _build_right()
 
     def _select_program(self, key):
         if key not in self.config["programs"]:
@@ -410,7 +523,7 @@ class HexPadGUI:
             self._save_config()
             self._build_prog_btns()
 
-    # ── Monitor MIDI (learn + feedback) ───────────────────────────────────────
+    # ── Monitor MIDI ────────────────────────────────────────────────────────────
     def _start_monitor(self):
         def run():
             while not self._mon_stop.is_set():
@@ -441,7 +554,7 @@ class HexPadGUI:
                     time.sleep(1)
         threading.Thread(target=run, daemon=True).start()
 
-    # ── Log & run ─────────────────────────────────────────────────────────────
+    # ── Log & run ────────────────────────────────────────────────────────────
     def _log(self, msg):
         self.console.config(state="normal")
         self.console.insert("end", msg + "\n")
@@ -487,8 +600,8 @@ class HexPadGUI:
 
     def _on_stopped(self):
         builtins.print = self._orig_print
-        self.running = False
-        self.listener = None
+        self.running   = False
+        self.listener  = None
         self.start_btn.config(state="normal")
         self.stop_btn.config(state="disabled")
         self.status_dot.config(text="\u25cf OFFLINE", fg=C["red"])
@@ -499,6 +612,7 @@ class HexPadGUI:
 
     def on_close(self):
         self._mon_stop.set()
+        self.combo_engine.stop()
         if self.listener: self.listener.stop()
         self.root.destroy()
 
