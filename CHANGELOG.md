@@ -1,28 +1,32 @@
 # Changelog
 
-## [1.5.0] - 2026-06-12
+## [1.6.0] - 2026-06-12
 
 ### Ajouté
-- `modules/game_profiles.py` — Gestionnaire de profils par jeu
-  - Charge/sauvegarde `game_profiles.json`
-  - Switch de profil à chaud depuis la GUI
-  - Chaque profil : nom, description, programme lié, combos
-  - API : `profiles.active`, `get_combos()`, `set_combo()`, `add_profile()`
-- `modules/combo_engine.py` — Moteur de macros / combos complexes
-  - Format token : `j,k,l` (séquentiel), `j+k` (simultané), `50` (délai ms)
-  - Touches spéciales : `space`, `enter`, `esc`, `f1-f12`, `ctrl`, `comma`...
-  - Thread dédié par combo, interruptible via `stop()`
-  - Support `loop=true` pour les combos répétitifs
-- `game_profiles.json` — 3 profils prêts à l'emploi
-  - **2XKO** (profil actif) : BnB Light/Heavy, Super S1/S2, Dash, Tag Combo, BnB Extend, Wake Up Super
-  - **SF6** : Drive Rush, Drive Impact, Drive Parry, SA1, SA2, BnB Modern, Throw, OD Special
-  - **Custom** : profil vide à personnaliser
-- `gui.py` v1.5.0
-  - Sélecteur **GAME PROFILE** avec description inline (colonne gauche)
-  - Boutons **COMBOS** générés dynamiquement depuis le profil actif
-  - Hint token macro visible dans le Preset Editor
-  - Bouton **+ NEW** / **×** pour créer/supprimer des profils
-  - `combo_engine.stop()` appelé à la fermeture de fenêtre
+- `modules/themes.py` — palettes Dark et Light découplées du GUI
+  - `DARK` : thème original cyan/violet/noir
+  - `LIGHT` : thème clair bleu/gris/blanc, mêmes accents
+  - `get(name)` pour switch dynamique
+- `gui.py` v1.6.0 — refonte **compact widget style**
+  - Taille fixe 420×580 px, verticale
+  - **Header** : logo + version + toggle thème `☀/◐` + minimise + close
+  - **Ligne device/profil** : device combobox + game profile + bouton `⚙` éditeur
+  - **Programme pills** : boutons compacts colorés par mode, scrollables
+  - **PAD Monitor** : grille 4×2 compacte avec flash vélocité couleur
+  - **COMBOS** : boutons 2 colonnes générés depuis le profil actif
+  - **START/STOP** pleine largeur
+  - **Console** inline 4 lignes
+  - **Toggle thème** persisté dans `config.json` → `"theme": "dark"|"light"`
+  - **Preset Editor** → fenêtre séparée (Toplevel) via bouton `⚙`, ne pollue plus le widget
+
+### Modifié
+- Preset Editor déplacé dans `_build_editor()` / `Toplevel` — ne s'ouvre qu'à la demande
+- Pad/Knob grids maintenant dans la fenêtre éditeur uniquement
+
+## [1.5.0] - 2026-06-12
+### Ajouté
+- `modules/game_profiles.py`, `modules/combo_engine.py`, `game_profiles.json`
+- GUI v1.5.0 : sélecteur de profil + boutons combos dynamiques + hint token macro
 
 ## [1.4.1] - 2026-06-12
 ### Ajouté
@@ -32,7 +36,6 @@
 ### Ajouté
 - `modules/lightfx_bridge.py`, `visualizer_bridge.py`, `sound_preset_bridge.py`
 - Presets 6 (RGB), 7 (Visualizer), 8 (Sampler)
-- `NOTES.md`, `sounds/.gitkeep`
 
 ## [1.3.1] - 2026-06-10
 ### Corrigé
