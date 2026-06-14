@@ -6,4 +6,5 @@ pynput
 obsws-python
 openrgb-python
 pygame
+sounddevice
 pyinstaller
