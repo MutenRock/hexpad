@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-HexPad GUI v1.8.0 — Mode selector at launch + larger windows
+HexPad GUI v1.8.1 — Bigger launch mode selector
 """
 import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox, simpledialog
@@ -15,7 +15,7 @@ from modules.game_profiles    import GameProfiles
 from modules.combo_engine     import ComboEngine
 from modules.themes           import DARK, LIGHT, MODE_COLORS, get as get_theme
 
-VERSION = "1.8.0"
+VERSION = "1.8.1"
 
 # Window modes  (w, h)
 WINDOW_MODES = {
@@ -37,52 +37,40 @@ OBS_ACTIONS   = ["scene","toggle_mute","toggle_stream","toggle_record","screensh
 # ─────────────────────────────────────────────────────────────────────────────
 # Mode selector dialog shown at launch
 # ─────────────────────────────────────────────────────────────────────────────
-def ask_window_mode(default_mode: str, theme_colors: dict) -> str | None:
-    """Show a small dialog to pick COMPACT / NORMAL / WIDE.
-    Returns chosen mode string, or None if cancelled."""
+def ask_window_mode(default_mode: str, theme_colors: dict) -> str:
     C = theme_colors
     dialog = tk.Tk()
     dialog.title("HexPad — Choisir le mode")
     dialog.resizable(False, False)
     dialog.configure(bg=C["bg"])
 
-    # Center on screen
-    dw, dh = 360, 260
-    dialog.geometry(f"{dw}x{dh}+{(dialog.winfo_screenwidth()-dw)//2}+{(dialog.winfo_screenheight()-dh)//2}")
+    dw, dh = 480, 360
+    sw, sh = dialog.winfo_screenwidth(), dialog.winfo_screenheight()
+    dialog.geometry(f"{dw}x{dh}+{(sw-dw)//2}+{(sh-dh)//2}")
 
     # Header
-    hdr = tk.Frame(dialog, bg=C["panel"], pady=8)
+    hdr = tk.Frame(dialog, bg=C["panel"], pady=12)
     hdr.pack(fill="x")
-    tk.Label(hdr, text="⬡", font=("Courier",22,"bold"), fg=C["accent"], bg=C["panel"]).pack(side="left", padx=(12,4))
-    tk.Label(hdr, text=f"HexPad  v{VERSION}", font=("Courier",12,"bold"), fg=C["text"], bg=C["panel"]).pack(side="left")
+    tk.Label(hdr, text="⬡", font=("Courier", 26, "bold"),
+             fg=C["accent"], bg=C["panel"]).pack(side="left", padx=(16, 6))
+    tk.Label(hdr, text=f"HexPad  v{VERSION}", font=("Courier", 14, "bold"),
+             fg=C["text"], bg=C["panel"]).pack(side="left")
 
-    tk.Label(dialog, text="Choisir le mode d'affichage", font=("Courier",9),
-             fg=C["dim"], bg=C["bg"]).pack(pady=(14,8))
+    tk.Label(dialog, text="Choisir le mode d'affichage",
+             font=("Courier", 10), fg=C["dim"], bg=C["bg"]).pack(pady=(16, 10))
 
     chosen = tk.StringVar(value=default_mode)
 
     desc = {
-        "COMPACT": f"480 × 680  —  Widget compact",
-        "NORMAL":  f"780 × 860  —  Preset Editor intégré",
-        "WIDE":    f"1060 × 720 —  3 colonnes",
+        "COMPACT": "480 × 680  —  Widget compact",
+        "NORMAL":  "780 × 860  —  Preset Editor intégré",
+        "WIDE":    "1060 × 720 —  3 colonnes",
     }
 
     btn_frame = tk.Frame(dialog, bg=C["bg"])
-    btn_frame.pack(pady=4)
+    btn_frame.pack(fill="x", padx=20)
 
     mode_btns = {}
-    for mode in ("COMPACT","NORMAL","WIDE"):
-        is_sel = mode == default_mode
-        col = C["accent"] if is_sel else C["btn"]
-        fg  = C["bg"]     if is_sel else C["text"]
-        b = tk.Button(btn_frame,
-            text=f"  {mode}\n  {desc[mode]}",
-            font=("Courier",9,"bold" if is_sel else "normal"),
-            bg=col, fg=fg, relief="flat", padx=16, pady=10,
-            cursor="hand2", anchor="w", justify="left",
-            command=lambda m=mode: _select(m))
-        b.pack(fill="x", pady=3, ipady=2)
-        mode_btns[mode] = b
 
     def _select(m):
         chosen.set(m)
@@ -91,16 +79,33 @@ def ask_window_mode(default_mode: str, theme_colors: dict) -> str | None:
             btn.config(
                 bg=C["accent"] if sel else C["btn"],
                 fg=C["bg"]     if sel else C["text"],
-                font=("Courier",9,"bold" if sel else "normal"),
+                font=("Courier", 11, "bold" if sel else "normal"),
             )
 
-    tk.Frame(dialog, bg=C["border"], height=1).pack(fill="x", padx=12, pady=8)
+    for mode in ("COMPACT", "NORMAL", "WIDE"):
+        is_sel = mode == default_mode
+        b = tk.Button(
+            btn_frame,
+            text=f"  {mode}\n  {desc[mode]}",
+            font=("Courier", 11, "bold" if is_sel else "normal"),
+            bg=C["accent"] if is_sel else C["btn"],
+            fg=C["bg"]     if is_sel else C["text"],
+            relief="flat", padx=18, pady=14,
+            cursor="hand2", anchor="w", justify="left",
+            command=lambda m=mode: _select(m),
+        )
+        b.pack(fill="x", pady=4, ipady=2)
+        mode_btns[mode] = b
 
-    ok_btn = tk.Button(dialog, text="▶  Lancer",
-        font=("Courier",10,"bold"), bg=C["green"], fg=C["bg"],
-        relief="flat", padx=20, pady=8, cursor="hand2",
-        command=dialog.destroy)
-    ok_btn.pack()
+    tk.Frame(dialog, bg=C["border"], height=1).pack(fill="x", padx=20, pady=10)
+
+    tk.Button(
+        dialog, text="▶  Lancer",
+        font=("Courier", 12, "bold"),
+        bg=C["green"], fg=C["bg"],
+        relief="flat", padx=24, pady=10,
+        cursor="hand2", command=dialog.destroy,
+    ).pack()
 
     dialog.mainloop()
     return chosen.get()
@@ -121,7 +126,6 @@ class HexPadGUI:
         self.config       = self._load_config()
         self.profiles     = GameProfiles()
         self.combo_engine = ComboEngine()
-        # Theme
         theme_name = self.config.get("theme", "dark")
         self.C = get_theme(theme_name)
         self._apply_window()
@@ -200,7 +204,6 @@ class HexPadGUI:
         C = self.C
         self._style()
         self.root.configure(bg=C["bg"])
-
         if self.window_mode == "WIDE":
             self._build_wide()
         elif self.window_mode == "NORMAL":
@@ -210,7 +213,6 @@ class HexPadGUI:
 
     # ─── COMPACT layout ───────────────────────────────────────────────────────
     def _build_compact(self):
-        C = self.C
         self._build_header(self.root)
         self._build_device_row(self.root)
         self._sep(self.root)
@@ -228,14 +230,11 @@ class HexPadGUI:
     def _build_normal(self):
         C = self.C
         self._build_header(self.root)
-
         paned = tk.PanedWindow(self.root, orient="horizontal",
                                bg=C["bg"], sashwidth=4, sashrelief="flat")
         paned.pack(fill="both", expand=True)
-
         left = tk.Frame(paned, bg=C["bg"])
         paned.add(left, minsize=380)
-
         self._build_device_row(left)
         self._sep(left)
         self._build_prog_section(left)
@@ -247,7 +246,6 @@ class HexPadGUI:
         self._build_start_stop(left)
         self._sep(left)
         self._build_console(left)
-
         right = tk.Frame(paned, bg=C["bg"])
         paned.add(right, minsize=360)
         self._build_inline_editor(right)
@@ -256,14 +254,11 @@ class HexPadGUI:
     def _build_wide(self):
         C = self.C
         self._build_header(self.root)
-
         cols = tk.Frame(self.root, bg=C["bg"])
         cols.pack(fill="both", expand=True)
         cols.columnconfigure(0, weight=1, minsize=300)
         cols.columnconfigure(1, weight=2, minsize=380)
         cols.columnconfigure(2, weight=2, minsize=340)
-
-        # Column 1: controls
         col1 = tk.Frame(cols, bg=C["bg"])
         col1.grid(row=0, column=0, sticky="nsew", padx=(6,2), pady=6)
         self._build_device_row(col1)
@@ -273,15 +268,11 @@ class HexPadGUI:
         self._build_pad_monitor(col1)
         self._sep(col1)
         self._build_start_stop(col1)
-
-        # Column 2: combos + console
         col2 = tk.Frame(cols, bg=C["bg"])
         col2.grid(row=0, column=1, sticky="nsew", padx=2, pady=6)
         self._build_combos(col2)
         self._sep(col2)
         self._build_console(col2)
-
-        # Column 3: inline editor
         col3 = tk.Frame(cols, bg=C["bg"])
         col3.grid(row=0, column=2, sticky="nsew", padx=(2,6), pady=6)
         self._build_inline_editor(col3)
@@ -297,10 +288,8 @@ class HexPadGUI:
                  fg=C["text"], bg=C["panel"]).pack(side="left")
         tk.Label(hdr, text=f" v{VERSION}", font=("Courier",7),
                  fg=C["dim"], bg=C["panel"]).pack(side="left")
-        # Mode badge
         tk.Label(hdr, text=f"[{self.window_mode}]", font=("Courier",7,"bold"),
                  fg=C["accent2"], bg=C["panel"]).pack(side="left", padx=6)
-
         tk.Button(hdr, text="✕", font=("Courier",10,"bold"),
                   bg=C["panel"], fg=C["dim"], relief="flat", padx=8,
                   cursor="hand2", command=self.on_close).pack(side="right", padx=2)
@@ -403,7 +392,7 @@ class HexPadGUI:
         self.console.config(state="disabled")
         self._log(f"⬡ HexPad v{VERSION} ready — mode: {self.window_mode}  theme: {self.C['name']}")
 
-    # ── Inline editor (for NORMAL / WIDE) ────────────────────────────────────
+    # ── Inline editor (NORMAL / WIDE) ────────────────────────────────────────
     def _build_inline_editor(self, parent):
         self._build_editor(parent)
 
@@ -807,20 +796,17 @@ class HexPadGUI:
 
 # ─────────────────────────────────────────────────────────────────────────────
 def main():
-    # Load theme early to colour the selector dialog
     try:
         with open("config.json") as f:
             cfg = json.load(f)
     except Exception:
         cfg = {}
 
-    theme_name    = cfg.get("theme", "dark")
-    default_mode  = cfg.get("window_mode", "NORMAL")
+    theme_name   = cfg.get("theme", "dark")
+    default_mode = cfg.get("window_mode", "NORMAL")
     C = get_theme(theme_name)
 
-    chosen_mode = ask_window_mode(default_mode, C)
-    if not chosen_mode:
-        chosen_mode = default_mode
+    chosen_mode = ask_window_mode(default_mode, C) or default_mode
 
     root = tk.Tk()
     app  = HexPadGUI(root, window_mode=chosen_mode)
