@@ -1,16 +1,13 @@
 #!/usr/bin/env python3
 """
-HexPad GUI v1.9.0 — Full mapping editor rewrite
-  - 2x4 pad layout (physical MPK layout)
-  - Bank A/B both fully editable
-  - Contextual fields per mode (gamepad/macro/obs/sampler/websocket)
-  - MIDI note names (C2, D2…)
-  - OBS action + scene/source sub-fields
-  - Sampler file/volume/loop fields
-  - Basic validation before save
+HexPad GUI v2.0.0
+  - Import / Export preset JSON
+  - Mode HTTP (HttpBridge)
+  - Bouton Refresh devices MIDI
+  - Architecture propre : point d'entrée unique
 """
 import tkinter as tk
-from tkinter import ttk, scrolledtext, messagebox, simpledialog
+from tkinter import ttk, scrolledtext, messagebox, simpledialog, filedialog
 import threading, json, mido, sys, os, builtins, time
 from modules.dispatcher       import Dispatcher
 from modules.midi_listener    import MidiListener
@@ -21,8 +18,9 @@ from modules.obs_bridge       import OBSBridge
 from modules.game_profiles    import GameProfiles
 from modules.combo_engine     import ComboEngine
 from modules.themes           import DARK, LIGHT, MODE_COLORS, get as get_theme
+from modules.http_bridge      import HttpBridge
 
-VERSION = "1.9.0"
+VERSION = "2.0.0"
 
 WINDOW_MODES = {
     "COMPACT": (480, 680),
@@ -47,8 +45,8 @@ MACRO_OPTIONS = [
 OBS_ACTIONS   = ["scene","toggle_mute","toggle_stream","toggle_record","screenshot","toggle_source","hotkey"]
 OBS_NEEDS_SCENE  = {"scene"}
 OBS_NEEDS_SOURCE = {"toggle_mute","toggle_source"}
+HTTP_METHODS  = ["GET", "POST", "PUT", "DELETE", "PATCH"]
 
-# MIDI note name helper
 _NOTE_NAMES = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"]
 def note_name(n): return f"{_NOTE_NAMES[n%12]}{(n//12)-1}"
 
@@ -229,6 +227,7 @@ class HexPadGUI:
         tk.Button(hdr, text=C["toggle_icon"], font=("Courier",10), bg=C["panel"], fg=C["accent"],
             relief="flat", padx=8, cursor="hand2", command=self._toggle_theme).pack(side="right", padx=2)
 
+    # ── Device row (avec bouton Refresh) ──────────────────────────────────────
     def _build_device_row(self, parent):
         C = self.C
         dp = tk.Frame(parent, bg=C["bg"], pady=4); dp.pack(fill="x", padx=10)
@@ -236,10 +235,15 @@ class HexPadGUI:
         self.status_dot.pack(side="left", padx=(0,2))
         devices = mido.get_input_names() or ["Aucun"]
         self.device_var = tk.StringVar(value=self.config.get("device_name",""))
-        dev_cb = ttk.Combobox(dp, textvariable=self.device_var, values=devices, width=16, state="readonly", style="H.TCombobox")
-        dev_cb.pack(side="left", padx=2)
+        self._dev_cb = ttk.Combobox(dp, textvariable=self.device_var, values=devices,
+            width=16, state="readonly", style="H.TCombobox")
+        self._dev_cb.pack(side="left", padx=2)
         for d in devices:
             if any(x in d.lower() for x in ("mpk","mini","akai")): self.device_var.set(d); break
+        # Bouton Refresh
+        tk.Button(dp, text="↺", font=("Courier",10,"bold"), bg=C["bg"], fg=C["accent2"],
+            relief="flat", padx=4, cursor="hand2",
+            command=self._refresh_devices).pack(side="left", padx=2)
         tk.Label(dp, text="|", fg=C["border"], bg=C["bg"], font=("Courier",10)).pack(side="left", padx=4)
         self.profile_var = tk.StringVar(value=self.profiles.active)
         self.profile_cb = ttk.Combobox(dp, textvariable=self.profile_var, values=self.profiles.names,
@@ -249,6 +253,16 @@ class HexPadGUI:
         if self.window_mode=="COMPACT":
             tk.Button(dp, text="⚙", font=("Courier",10), bg=C["bg"], fg=C["accent2"],
                 relief="flat", padx=4, cursor="hand2", command=self._open_editor).pack(side="right")
+
+    def _refresh_devices(self):
+        """Rafraîchit la liste des périphériques MIDI sans redémarrer."""
+        devices = mido.get_input_names() or ["Aucun"]
+        self._dev_cb.config(values=devices)
+        self._log(f"[MIDI] {len(devices)} device(s) trouvé(s)")
+        # Sélection auto du premier MPK trouvé
+        for d in devices:
+            if any(x in d.lower() for x in ("mpk","mini","akai")):
+                self.device_var.set(d); break
 
     def _build_prog_section(self, parent):
         C = self.C
@@ -349,9 +363,8 @@ class HexPadGUI:
         if key not in self.config["programs"]: key = list(self.config["programs"].keys())[0]
         self._current_prog = key
         for k,(b,col) in self.prog_btns.items():
-            b.config(bg=col if k==key else self.C["btn"], fg=self.C["bg"] if k==key else col)
+            b.config(bg=col if k==key else self.C["btn"], fg=self.C["sel_fg"] if k==key else col)
         self._log(f"[PROG] {key} — {self.config['programs'][key].get('name','')}")
-        # refresh editor if open
         if hasattr(self, "_me_loaded"): self._me_load_preset()
 
     # ── Monitor MIDI ──────────────────────────────────────────────────────────
@@ -370,8 +383,7 @@ class HexPadGUI:
                                 ns = str(msg.note)
                                 if ns in self._pad_btns:
                                     b=self._pad_btns[ns]; vel=msg.velocity
-                                    r=int(vel/127*0xff); g=int((1-vel/127)*0xe7)
-                                    hc=f"#{r:02x}{0xff:02x}{g:02x}"
+                                    hc=self.C["accent"]  # flash violet
                                     self.root.after(0, b.config, {"bg":hc,"fg":self.C["bg"]})
                                     self.root.after(200, b.config, {"bg":self.C["pad_off"],"fg":self.C["dim"]})
                                 if self._learn_target: self.root.after(0, self._on_learn_received, msg.note)
@@ -385,7 +397,6 @@ class HexPadGUI:
         self._log(f"[LEARN] Note {note} ({note_name(note)}) → pad {pad_key}")
         btn.config(bg=self.C["panel2"], fg=self.C["dim"])
         self._learn_target = None
-        # refresh pad grid so learned note appears
         if hasattr(self,"_me_pad_frame"): self._me_build_pad_grid()
 
     def _log(self, msg):
@@ -400,6 +411,7 @@ class HexPadGUI:
         if mode=="websocket": return WebSocketBridge(prog.get("ws_url","ws://localhost:8765")), mode
         if mode=="macro":     return MacroBridge(prog), mode
         if mode=="obs":       return OBSBridge(prog), mode
+        if mode=="http":      return HttpBridge(prog), mode
         return None, "debug"
 
     def _start(self):
@@ -430,11 +442,10 @@ class HexPadGUI:
         self.status_dot.config(fg=self.C["red"]); self._log("■ Arrete.")
 
     # ──────────────────────────────────────────────────────────────────────────
-    # MAPPING EDITOR (new, complete rewrite)
+    # MAPPING EDITOR
     # ──────────────────────────────────────────────────────────────────────────
 
     def _open_editor(self):
-        """COMPACT mode: open editor as Toplevel."""
         if self._editor_win and self._editor_win.winfo_exists():
             self._editor_win.lift(); return
         win = tk.Toplevel(self.root)
@@ -445,18 +456,21 @@ class HexPadGUI:
         self._build_mapping_editor(win)
 
     def _build_mapping_editor(self, parent):
-        """Full mapping editor — pad 2x4 layout, Bank A/B, contextual fields."""
         C = self.C
-
-        # ── Header
         hdr = tk.Frame(parent, bg=C["panel2"]); hdr.pack(fill="x")
         tk.Label(hdr, text="◈ MAPPING EDITOR", font=("Courier",10,"bold"),
             fg=C["accent"], bg=C["panel2"]).pack(side="left", padx=12, pady=8)
         self._me_save_indicator = tk.Label(hdr, text="", font=("Courier",8),
             fg=C["green"], bg=C["panel2"])
         self._me_save_indicator.pack(side="right", padx=12)
+        # Import / Export buttons
+        tk.Button(hdr, text="↑ Export", font=("Courier",8), bg=C["btn"], fg=C["accent2"],
+            relief="flat", padx=6, pady=4, cursor="hand2",
+            command=self._me_export_preset).pack(side="right", padx=2)
+        tk.Button(hdr, text="↓ Import", font=("Courier",8), bg=C["btn"], fg=C["accent2"],
+            relief="flat", padx=6, pady=4, cursor="hand2",
+            command=self._me_import_preset).pack(side="right", padx=2)
 
-        # scrollable body
         canvas = tk.Canvas(parent, bg=C["bg"], bd=0, highlightthickness=0)
         sb = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
         canvas.configure(yscrollcommand=sb.set)
@@ -470,7 +484,6 @@ class HexPadGUI:
         def _mousewheel(e): canvas.yview_scroll(int(-1*(e.delta/120)), "units")
         canvas.bind_all("<MouseWheel>", _mousewheel)
 
-        # ── Preset selector row
         prow = tk.Frame(body, bg=C["bg"]); prow.pack(fill="x", padx=12, pady=(10,4))
         tk.Label(prow, text="Preset :", font=("Courier",9,"bold"),
             fg=C["dim"], bg=C["bg"]).pack(side="left")
@@ -481,7 +494,6 @@ class HexPadGUI:
         self._me_prog_cb = ttk.Combobox(prow, textvariable=self._me_prog_var,
             values=prog_labels, width=28, state="readonly", style="H.TCombobox")
         self._me_prog_cb.pack(side="left", padx=8)
-        # set display to current prog
         for label, key in self._me_prog_map.items():
             if key == self._current_prog:
                 self._me_prog_var.set(label); break
@@ -495,7 +507,6 @@ class HexPadGUI:
 
         tk.Frame(body, bg=C["border"], height=1).pack(fill="x", padx=12, pady=6)
 
-        # ── Meta fields (name + mode)
         meta = tk.Frame(body, bg=C["bg"]); meta.pack(fill="x", padx=12)
         tk.Label(meta, text="Nom", font=("Courier",8), fg=C["dim"], bg=C["bg"]).grid(row=0, column=0, sticky="w", pady=3)
         self._me_name_var = tk.StringVar()
@@ -509,24 +520,18 @@ class HexPadGUI:
         mode_cb.grid(row=0, column=3, padx=8, sticky="w")
         mode_cb.bind("<<ComboboxSelected>>", lambda e: self._me_refresh_mode_fields())
 
-        # ── Mode-specific connection fields
         self._me_conn_frame = tk.Frame(body, bg=C["bg"]); self._me_conn_frame.pack(fill="x", padx=12, pady=4)
-
-        # ws url
-        self._me_ws_url_var = tk.StringVar(value="ws://localhost:8765")
-        # obs
-        self._me_obs_host_var = tk.StringVar(value="localhost")
-        self._me_obs_port_var = tk.StringVar(value="4455")
-        self._me_obs_pass_var = tk.StringVar(value="")
-        # pitch/mod
-        self._me_pitch_var = tk.StringVar(value="")
-        self._me_mod_var   = tk.StringVar(value="")
-        # sampler
-        self._me_sounds_dir_var = tk.StringVar(value="sounds")
+        self._me_ws_url_var      = tk.StringVar(value="ws://localhost:8765")
+        self._me_obs_host_var    = tk.StringVar(value="localhost")
+        self._me_obs_port_var    = tk.StringVar(value="4455")
+        self._me_obs_pass_var    = tk.StringVar(value="")
+        self._me_pitch_var       = tk.StringVar(value="")
+        self._me_mod_var         = tk.StringVar(value="")
+        self._me_sounds_dir_var  = tk.StringVar(value="sounds")
+        self._me_http_timeout_var = tk.StringVar(value="3")
 
         tk.Frame(body, bg=C["border"], height=1).pack(fill="x", padx=12, pady=6)
 
-        # ── Bank selector
         bank_row = tk.Frame(body, bg=C["bg"]); bank_row.pack(fill="x", padx=12)
         tk.Label(bank_row, text="BANK", font=("Courier",9,"bold"),
             fg=C["accent2"], bg=C["bg"]).pack(side="left")
@@ -536,31 +541,27 @@ class HexPadGUI:
                 font=("Courier",9,"bold"), bg=C["bg"], fg=C["accent"],
                 selectcolor=C["btn"], activebackground=C["bg"],
                 command=self._me_build_pad_grid).pack(side="left", padx=4)
-        # note label checkbox
         self._me_show_note_var = tk.BooleanVar(value=True)
         tk.Checkbutton(bank_row, text="noms de notes", variable=self._me_show_note_var,
             font=("Courier",7), bg=C["bg"], fg=C["dim"],
             selectcolor=C["btn"], activebackground=C["bg"],
             command=self._me_build_pad_grid).pack(side="right", padx=8)
 
-        # ── Pad grid (2x4 physical layout)
         tk.Label(body, text="  PADS — layout physique MPK", font=("Courier",8,"bold"),
             fg=C["accent2"], bg=C["bg"]).pack(anchor="w", padx=12, pady=(8,2))
         self._me_pad_frame = tk.Frame(body, bg=C["bg"])
         self._me_pad_frame.pack(fill="x", padx=12, pady=4)
         self._me_pad_vars = {}
-        self._me_pad_sub_vars = {}  # for obs sub-fields
+        self._me_pad_sub_vars = {}
 
         tk.Frame(body, bg=C["border"], height=1).pack(fill="x", padx=12, pady=6)
 
-        # ── Knob row
         tk.Label(body, text="  ENCODEURS (CC)", font=("Courier",8,"bold"),
             fg=C["accent2"], bg=C["bg"]).pack(anchor="w", padx=12)
         self._me_knob_frame = tk.Frame(body, bg=C["bg"])
         self._me_knob_frame.pack(fill="x", padx=12, pady=4)
         self._me_knob_vars = {}
 
-        # ── Pitch / Mod row
         pm_row = tk.Frame(body, bg=C["bg"]); pm_row.pack(fill="x", padx=12, pady=4)
         for label, var in (("Pitchwheel →", self._me_pitch_var),("Modwheel →", self._me_mod_var)):
             tk.Label(pm_row, text=label, font=("Courier",8), fg=C["dim"], bg=C["bg"]).pack(side="left")
@@ -569,7 +570,6 @@ class HexPadGUI:
 
         tk.Frame(body, bg=C["border"], height=1).pack(fill="x", padx=12, pady=8)
 
-        # ── Save button
         btns = tk.Frame(body, bg=C["bg"]); btns.pack(fill="x", padx=12, pady=(0,16))
         tk.Button(btns, text="💾  SAUVEGARDER", font=("Courier",10,"bold"),
             bg=C["accent"], fg=C["bg"], relief="flat", padx=16, pady=10,
@@ -581,6 +581,67 @@ class HexPadGUI:
         self._me_loaded = True
         self._me_load_preset()
 
+    # ── Import / Export ───────────────────────────────────────────────────────
+
+    def _me_export_preset(self):
+        """Exporte le preset courant vers un fichier JSON."""
+        prog = self._get_current_preset()
+        if not prog:
+            messagebox.showwarning("Export", "Aucun preset sélectionné."); return
+        path = filedialog.asksaveasfilename(
+            title="Exporter le preset",
+            defaultextension=".json",
+            filetypes=[("JSON", "*.json"), ("Tous", "*.*")],
+            initialfile=f"hexpad_preset_{self._current_prog}.json"
+        )
+        if not path: return
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(prog, f, indent=2, ensure_ascii=False)
+            self._log(f"[EXPORT] {os.path.basename(path)}")
+        except Exception as e:
+            messagebox.showerror("Export", str(e))
+
+    def _me_import_preset(self):
+        """Importe un preset depuis un fichier JSON dans le slot courant."""
+        path = filedialog.askopenfilename(
+            title="Importer un preset",
+            filetypes=[("JSON", "*.json"), ("Tous", "*.*")]
+        )
+        if not path: return
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if not isinstance(data, dict) or "mode" not in data:
+                messagebox.showerror("Import", "Fichier invalide : clé 'mode' manquante."); return
+            # Demande si on écrase le slot courant ou crée un nouveau
+            choice = messagebox.askyesnocancel(
+                "Import",
+                f"Importer dans le preset {self._current_prog} (Oui)\n"
+                f"ou créer un nouveau slot (Non) ?"
+            )
+            if choice is None: return
+            if choice:  # Oui → écraser
+                key = self._current_prog
+            else:       # Non → nouveau slot
+                keys = list(self.config["programs"].keys())
+                key  = str(max(int(k) for k in keys) + 1)
+            self.config["programs"][key] = data
+            self._save_config()
+            self._current_prog = key
+            self._build_prog_btns(); self._select_program(key)
+            # Rebuild combobox
+            prog_keys   = list(self.config["programs"].keys())
+            prog_labels = [f"{k} — {self.config['programs'][k].get('name','')}" for k in prog_keys]
+            self._me_prog_map = dict(zip(prog_labels, prog_keys))
+            self._me_prog_cb.config(values=prog_labels)
+            for label, k in self._me_prog_map.items():
+                if k == key: self._me_prog_var.set(label); break
+            self._me_load_preset()
+            self._log(f"[IMPORT] {os.path.basename(path)} → slot {key}")
+        except Exception as e:
+            messagebox.showerror("Import", str(e))
+
     # ── Mapping Editor logic ──────────────────────────────────────────────────
 
     def _me_on_prog_changed(self, event=None):
@@ -588,7 +649,7 @@ class HexPadGUI:
         key   = self._me_prog_map.get(label, label)
         self._current_prog = key
         for k,(b,col) in self.prog_btns.items():
-            b.config(bg=col if k==key else self.C["btn"], fg=self.C["bg"] if k==key else col)
+            b.config(bg=col if k==key else self.C["btn"], fg=self.C["sel_fg"] if k==key else col)
         self._me_load_preset()
 
     def _me_load_preset(self):
@@ -603,12 +664,12 @@ class HexPadGUI:
         self._me_pitch_var.set(prog.get("pitchwheel",""))
         self._me_mod_var.set(prog.get("modwheel",""))
         self._me_sounds_dir_var.set(prog.get("sounds_dir","sounds"))
+        self._me_http_timeout_var.set(str(prog.get("http_timeout",3)))
         self._me_refresh_mode_fields()
         self._me_build_pad_grid()
         self._me_build_knob_grid()
 
     def _me_refresh_mode_fields(self):
-        """Show/hide connection fields based on current mode."""
         C = self.C
         for w in self._me_conn_frame.winfo_children(): w.destroy()
         mode = self._me_mode_var.get()
@@ -633,7 +694,10 @@ class HexPadGUI:
         elif mode in ("sound_preset","music"):
             lbl("Sons dir").grid(row=0, column=col, sticky="w", padx=(0,4)); col+=1
             ent(self._me_sounds_dir_var, 18).grid(row=0, column=col, sticky="w"); col+=1
-        # rebuild pad grid because options change with mode
+        elif mode=="http":
+            lbl("Timeout (s)").grid(row=0, column=col, sticky="w", padx=(0,4)); col+=1
+            ent(self._me_http_timeout_var, 4).grid(row=0, column=col, sticky="w"); col+=1
+            lbl("— méthode + URL par pad ci-dessous").grid(row=0, column=col, sticky="w", padx=(12,0))
         if hasattr(self,"_me_pad_frame"): self._me_build_pad_grid()
         if hasattr(self,"_me_knob_frame"): self._me_build_knob_grid()
 
@@ -650,16 +714,14 @@ class HexPadGUI:
         pads  = prog.get(pads_key, {})
         show_note = self._me_show_note_var.get() if hasattr(self,"_me_show_note_var") else True
 
-        # options per mode
         if   mode=="gamepad":             pad_opts = BTN_OPTIONS
         elif mode=="macro":               pad_opts = MACRO_OPTIONS
         elif mode=="obs":                 pad_opts = OBS_ACTIONS
-        elif mode in ("sound_preset","music"): pad_opts = None  # free text (filename)
+        elif mode in ("sound_preset","music"): pad_opts = None
+        elif mode=="http":                pad_opts = "http"
         else:                             pad_opts = None
 
-        # MPK physical layout: row0 = P5-P8 (top), row1 = P1-P4 (bottom)
-        # MIDI notes: bank A → 36-43, physical top row = notes[4:8], bottom = notes[0:4]
-        layout = [notes[4:8], notes[0:4]]  # top row first, then bottom
+        layout = [notes[4:8], notes[0:4]]
 
         for row_idx, row_notes in enumerate(layout):
             for col_idx, note in enumerate(row_notes):
@@ -668,29 +730,24 @@ class HexPadGUI:
                 nn  = note_name(note)
                 raw = pads.get(ns, "")
 
-                # card
                 card = tk.Frame(self._me_pad_frame, bg=C["panel2"],
                     relief="flat", padx=4, pady=4)
                 card.grid(row=row_idx, column=col_idx, padx=3, pady=3, sticky="nsew")
                 self._me_pad_frame.columnconfigure(col_idx, weight=1)
 
-                # header row
                 h = tk.Frame(card, bg=C["panel2"]); h.pack(fill="x")
                 pad_label = f"P{pad_num}" + (f"  {nn}" if show_note else "")
                 tk.Label(h, text=pad_label, font=("Courier",7,"bold"),
                     fg=C["accent"], bg=C["panel2"]).pack(side="left")
                 tk.Label(h, text=f"n{note}", font=("Courier",6),
                     fg=C["dim"], bg=C["panel2"]).pack(side="left", padx=2)
-                # MIDI learn button
                 learn_btn = tk.Button(h, text="◎", font=("Courier",7),
                     bg=C["panel2"], fg=C["dim"], relief="flat", cursor="hand2",
                     pady=0, padx=2)
                 learn_btn.pack(side="right")
                 learn_btn.config(command=lambda ns=ns, b=learn_btn: self._me_midi_learn(ns, b))
 
-                # ─ Mode-specific fields ─
                 if mode=="obs":
-                    # action is a dict: {action, scene/source/…}
                     if isinstance(raw, dict):
                         act_val = raw.get("action","")
                         sub_val = raw.get("scene", raw.get("source", raw.get("hotkey","")))
@@ -704,22 +761,11 @@ class HexPadGUI:
                     act_cb = ttk.Combobox(card, textvariable=act_var, values=[""]+OBS_ACTIONS,
                         width=11, state="normal", style="H.TCombobox")
                     act_cb.pack(fill="x")
-                    sub_entry = tk.Entry(card, textvariable=sub_var, bg=C["btn"], fg=C["accent2"],
+                    tk.Entry(card, textvariable=sub_var, bg=C["btn"], fg=C["accent2"],
                         font=("Courier",7), relief="flat", width=12,
-                        insertbackground=C["accent"])
-                    sub_entry.pack(fill="x", pady=(2,0))
-                    # placeholder
-                    def _update_sub_placeholder(act_var=act_var, sub_entry=sub_entry):
-                        act = act_var.get()
-                        if act in OBS_NEEDS_SCENE:  ph="scene name"
-                        elif act in OBS_NEEDS_SOURCE: ph="source name"
-                        elif act=="hotkey":           ph="hotkey id"
-                        else:                         ph=""
-                        sub_entry.config(fg=C["dim"] if not sub_var.get() else C["accent2"])
-                    act_cb.bind("<<ComboboxSelected>>", lambda e, f=_update_sub_placeholder: f())
+                        insertbackground=C["accent"]).pack(fill="x", pady=(2,0))
 
                 elif mode in ("sound_preset","music"):
-                    # dict: {file, volume, loop} or "stop_all"
                     if isinstance(raw, dict):
                         file_val   = raw.get("file","")
                         vol_val    = str(raw.get("volume","1.0"))
@@ -744,6 +790,29 @@ class HexPadGUI:
                     tk.Checkbutton(vol_row, text="loop", variable=loop_var,
                         font=("Courier",6), bg=C["panel2"], fg=C["dim"],
                         selectcolor=C["btn"], activebackground=C["panel2"]).pack(side="left", padx=4)
+
+                elif mode=="http":
+                    # raw = {"method": "GET", "url": "...", "body": {...}, "headers": {...}}
+                    if isinstance(raw, dict):
+                        method_val = raw.get("method", "GET")
+                        url_val    = raw.get("url", "")
+                        body_val   = json.dumps(raw.get("body", ""), ensure_ascii=False) if raw.get("body") else ""
+                    else:
+                        method_val, url_val, body_val = "GET", raw or "", ""
+                    method_var = tk.StringVar(value=method_val)
+                    url_var    = tk.StringVar(value=url_val)
+                    body_var   = tk.StringVar(value=body_val)
+                    self._me_pad_vars[ns]     = url_var
+                    self._me_pad_sub_vars[ns] = (method_var, body_var)
+                    m_row = tk.Frame(card, bg=C["panel2"]); m_row.pack(fill="x")
+                    ttk.Combobox(m_row, textvariable=method_var, values=HTTP_METHODS,
+                        width=6, state="readonly", style="H.TCombobox").pack(side="left")
+                    tk.Entry(m_row, textvariable=url_var, bg=C["btn"], fg=C["accent"],
+                        font=("Courier",7), relief="flat",
+                        insertbackground=C["accent"]).pack(side="left", fill="x", expand=True, padx=(2,0))
+                    tk.Entry(card, textvariable=body_var, bg=C["btn"], fg=C["accent2"],
+                        font=("Courier",6), relief="flat",
+                        insertbackground=C["accent"]).pack(fill="x", pady=(2,0))
 
                 elif pad_opts is not None:
                     var = tk.StringVar(value=raw if isinstance(raw,str) else "")
@@ -799,8 +868,10 @@ class HexPadGUI:
             except: prog["obs_port"] = 4455
             prog["obs_password"] = self._me_obs_pass_var.get()
         if mode in ("sound_preset","music"): prog["sounds_dir"] = self._me_sounds_dir_var.get()
+        if mode=="http":
+            try: prog["http_timeout"] = int(self._me_http_timeout_var.get())
+            except: prog["http_timeout"] = 3
 
-        # pads bank A
         bank = self._me_bank_var.get()
         pads_key = "pads" if bank=="A" else "pads_bank_b"
         pads = {}
@@ -828,21 +899,29 @@ class HexPadGUI:
                     except: entry["volume"] = 1.0
                     if loop_var.get(): entry["loop"] = True
                 pads[ns] = entry
+            elif mode=="http":
+                url_v = var.get()
+                if not url_v: continue
+                sub = self._me_pad_sub_vars.get(ns)
+                entry = {"url": url_v}
+                if sub:
+                    method_var, body_var = sub
+                    entry["method"] = method_var.get() or "GET"
+                    body_str = body_var.get().strip()
+                    if body_str:
+                        try: entry["body"] = json.loads(body_str)
+                        except: entry["body"] = body_str
+                pads[ns] = entry
             else:
                 v = var.get()
                 if v: pads[ns] = v
 
         if pads: prog[pads_key] = pads
-
-        # keep the OTHER bank untouched
         existing = self._get_current_preset() or {}
         other_key = "pads_bank_b" if bank=="A" else "pads"
         if other_key in existing: prog[other_key] = existing[other_key]
-
-        # knobs
         knobs = {cc: v.get() for cc,v in self._me_knob_vars.items() if v.get()}
         if knobs: prog["knobs"] = knobs
-
         pw = self._me_pitch_var.get(); mw = self._me_mod_var.get()
         if pw: prog["pitchwheel"] = pw
         if mw: prog["modwheel"]   = mw
@@ -854,6 +933,10 @@ class HexPadGUI:
         if prog.get("mode")=="obs":
             try: int(prog.get("obs_port",""))
             except: errors.append("OBS port invalide (doit être un entier).")
+        if prog.get("mode")=="http":
+            for ns, pad in prog.get("pads",{}).items():
+                if isinstance(pad, dict) and not pad.get("url"):
+                    errors.append(f"Pad {ns} : URL manquante.")
         return errors
 
     def _me_save(self):
@@ -863,7 +946,6 @@ class HexPadGUI:
             messagebox.showerror("Erreur de validation", "\n".join(errors)); return
         self.config["programs"][self._current_prog] = prog
         self._save_config()
-        # rebuild prog pills
         prog_keys   = list(self.config["programs"].keys())
         prog_labels = [f"{k} — {self.config['programs'][k].get('name','')}" for k in prog_keys]
         self._me_prog_map = dict(zip(prog_labels, prog_keys))
@@ -883,7 +965,6 @@ class HexPadGUI:
         self._save_config()
         self._current_prog = new_key
         self._build_prog_btns(); self._select_program(new_key)
-        # rebuild cb
         prog_keys   = list(self.config["programs"].keys())
         prog_labels = [f"{k} — {self.config['programs'][k].get('name','')}" for k in prog_keys]
         self._me_prog_map = dict(zip(prog_labels, prog_keys))
