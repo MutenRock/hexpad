@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
-HexPad GUI v2.0.1
+HexPad GUI v2.0.2
   - Import / Export preset JSON
   - Mode HTTP (HttpBridge)
   - Mode Music (MusicBridge) — câblé
   - Bouton Refresh devices MIDI
   - Architecture propre : point d'entrée unique
+  - Fix: clic sur mode lance directement l'app
 """
 import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox, simpledialog, filedialog
@@ -28,7 +29,7 @@ try:
 except ImportError:
     MUSIC_OK = False
 
-VERSION = "2.0.1"
+VERSION = "2.0.2"
 
 WINDOW_MODES = {
     "COMPACT": (480, 680),
@@ -85,27 +86,39 @@ def ask_window_mode(default_mode: str, theme_colors: dict) -> str:
     btn_frame = tk.Frame(dialog, bg=C["bg"])
     btn_frame.pack(fill="x", padx=20)
     mode_btns = {}
+
+    def _launch(m=None):
+        if m:
+            chosen.set(m)
+        dialog.quit()
+
     def _select(m):
         chosen.set(m)
         for k, b in mode_btns.items():
             sel = k == m
             b.config(bg=C["accent"] if sel else C["btn"], fg=C["bg"] if sel else C["text"],
                      font=("Courier",11,"bold" if sel else "normal"))
+
     for mode in ("COMPACT","NORMAL","WIDE"):
         is_sel = mode == default_mode
         b = tk.Button(btn_frame, text=f"  {mode}\n  {desc[mode]}",
             font=("Courier",11,"bold" if is_sel else "normal"),
             bg=C["accent"] if is_sel else C["btn"], fg=C["bg"] if is_sel else C["text"],
             relief="flat", padx=18, pady=14, cursor="hand2", anchor="w", justify="left",
-            command=lambda m=mode: _select(m))
+            command=lambda m=mode: _launch(m))
         b.pack(fill="x", pady=4, ipady=2)
         mode_btns[mode] = b
+
     tk.Frame(dialog, bg=C["border"], height=1).pack(fill="x", padx=20, pady=10)
     tk.Button(dialog, text="▶  Lancer", font=("Courier",12,"bold"),
         bg=C["green"], fg=C["bg"], relief="flat", padx=24, pady=10,
-        cursor="hand2", command=dialog.destroy).pack()
+        cursor="hand2", command=_launch).pack()
+
+    dialog.protocol("WM_DELETE_WINDOW", _launch)
     dialog.mainloop()
-    return chosen.get()
+    result = chosen.get()
+    dialog.destroy()
+    return result
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -712,7 +725,6 @@ class HexPadGUI:
                 lbl("Volume").grid(row=0, column=col, sticky="w", padx=(8,4)); col+=1
                 ent(self._me_music_vol_var, 4).grid(row=0, column=col, sticky="w"); col+=1
                 lbl("Device").grid(row=0, column=col, sticky="w", padx=(8,4)); col+=1
-                # liste dynamique des périphériques audio
                 dev_names = [""] + ([d[1] for d in __import__("modules.music_bridge", fromlist=["list_output_devices"]).list_output_devices()] if MUSIC_OK else [])
                 ttk.Combobox(self._me_conn_frame, textvariable=self._me_music_dev_var,
                     values=dev_names, width=18, state="normal",
