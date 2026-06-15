@@ -1,0 +1,72 @@
+name: Build HexPad EXE
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (ex: v2.0.0)'
+        required: false
+        default: 'dev'
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Generate icon
+        run: python assets/make_icon.py
+
+      - name: Build EXE with PyInstaller
+        run: pyinstaller hexpad.spec --noconfirm --clean
+
+      - name: Rename artifact
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          if ($tag -eq "") { $tag = "dev" }
+          Rename-Item dist\HexPad.exe "HexPad-$tag-windows.exe"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: HexPad-windows
+          path: dist\HexPad-*.exe
+          retention-days: 30
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist\HexPad-*.exe
+          generate_release_notes: true
+          body: |
+            ## HexPad ${{ github.ref_name }}
+
+            ### Installation
+            1. Télécharge `HexPad-${{ github.ref_name }}-windows.exe`
+            2. Lance directement — aucun Python requis
+            3. `config.json` et `game_profiles.json` sont créés au premier lancement
+
+            ### Prérequis matériel
+            - MPK Mini (ou tout contrôleur MIDI USB)
+            - Driver MIDI Windows (MIDI Mapper / ASIO optionnel)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
