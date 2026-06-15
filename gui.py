@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-HexPad GUI v2.0.0
+HexPad GUI v2.0.1
   - Import / Export preset JSON
   - Mode HTTP (HttpBridge)
+  - Mode Music (MusicBridge) — câblé
   - Bouton Refresh devices MIDI
   - Architecture propre : point d'entrée unique
 """
@@ -19,8 +20,15 @@ from modules.game_profiles    import GameProfiles
 from modules.combo_engine     import ComboEngine
 from modules.themes           import DARK, LIGHT, MODE_COLORS, get as get_theme
 from modules.http_bridge      import HttpBridge
+from modules.sound_preset_bridge import SoundPresetBridge
 
-VERSION = "2.0.0"
+try:
+    from modules.music_bridge import MusicBridge
+    MUSIC_OK = True
+except ImportError:
+    MUSIC_OK = False
+
+VERSION = "2.0.1"
 
 WINDOW_MODES = {
     "COMPACT": (480, 680),
@@ -259,7 +267,6 @@ class HexPadGUI:
         devices = mido.get_input_names() or ["Aucun"]
         self._dev_cb.config(values=devices)
         self._log(f"[MIDI] {len(devices)} device(s) trouvé(s)")
-        # Sélection auto du premier MPK trouvé
         for d in devices:
             if any(x in d.lower() for x in ("mpk","mini","akai")):
                 self.device_var.set(d); break
@@ -307,7 +314,8 @@ class HexPadGUI:
             insertbackground=C["accent"], selectbackground=C["accent2"])
         self.console.pack(fill="both", expand=True, padx=10, pady=(0,8))
         self.console.config(state="disabled")
-        self._log(f"⬡ HexPad v{VERSION} ready — mode: {self.window_mode}  theme: {self.C['name']}")
+        music_status = "" if MUSIC_OK else "  ⚠ pip install pygame sounddevice"
+        self._log(f"⬡ HexPad v{VERSION} ready — mode: {self.window_mode}  theme: {self.C['name']}{music_status}")
 
     # ── Prog pills ────────────────────────────────────────────────────────────
     def _build_prog_btns(self):
@@ -382,8 +390,8 @@ class HexPadGUI:
                             if msg and msg.type=="note_on" and msg.velocity>0:
                                 ns = str(msg.note)
                                 if ns in self._pad_btns:
-                                    b=self._pad_btns[ns]; vel=msg.velocity
-                                    hc=self.C["accent"]  # flash violet
+                                    b=self._pad_btns[ns]
+                                    hc=self.C["accent"]
                                     self.root.after(0, b.config, {"bg":hc,"fg":self.C["bg"]})
                                     self.root.after(200, b.config, {"bg":self.C["pad_off"],"fg":self.C["dim"]})
                                 if self._learn_target: self.root.after(0, self._on_learn_received, msg.note)
@@ -407,11 +415,18 @@ class HexPadGUI:
     # ── Start / Stop ──────────────────────────────────────────────────────────
     def _build_bridge(self, prog):
         mode = prog.get("mode","debug")
-        if mode=="gamepad":   return GamepadBridge(prog), mode
-        if mode=="websocket": return WebSocketBridge(prog.get("ws_url","ws://localhost:8765")), mode
-        if mode=="macro":     return MacroBridge(prog), mode
-        if mode=="obs":       return OBSBridge(prog), mode
-        if mode=="http":      return HttpBridge(prog), mode
+        if mode=="gamepad":      return GamepadBridge(prog), mode
+        if mode=="websocket":    return WebSocketBridge(prog.get("ws_url","ws://localhost:8765")), mode
+        if mode=="macro":        return MacroBridge(prog), mode
+        if mode=="obs":          return OBSBridge(prog), mode
+        if mode=="http":         return HttpBridge(prog), mode
+        if mode=="sound_preset": return SoundPresetBridge(prog), mode
+        if mode=="music":
+            if MUSIC_OK:
+                return MusicBridge(prog), mode
+            else:
+                self._log("[MUSIC] ⚠ pygame/sounddevice manquants — mode debug utilisé")
+                return None, "debug"
         return None, "debug"
 
     def _start(self):
@@ -463,7 +478,6 @@ class HexPadGUI:
         self._me_save_indicator = tk.Label(hdr, text="", font=("Courier",8),
             fg=C["green"], bg=C["panel2"])
         self._me_save_indicator.pack(side="right", padx=12)
-        # Import / Export buttons
         tk.Button(hdr, text="↑ Export", font=("Courier",8), bg=C["btn"], fg=C["accent2"],
             relief="flat", padx=6, pady=4, cursor="hand2",
             command=self._me_export_preset).pack(side="right", padx=2)
@@ -521,14 +535,16 @@ class HexPadGUI:
         mode_cb.bind("<<ComboboxSelected>>", lambda e: self._me_refresh_mode_fields())
 
         self._me_conn_frame = tk.Frame(body, bg=C["bg"]); self._me_conn_frame.pack(fill="x", padx=12, pady=4)
-        self._me_ws_url_var      = tk.StringVar(value="ws://localhost:8765")
-        self._me_obs_host_var    = tk.StringVar(value="localhost")
-        self._me_obs_port_var    = tk.StringVar(value="4455")
-        self._me_obs_pass_var    = tk.StringVar(value="")
-        self._me_pitch_var       = tk.StringVar(value="")
-        self._me_mod_var         = tk.StringVar(value="")
-        self._me_sounds_dir_var  = tk.StringVar(value="sounds")
+        self._me_ws_url_var       = tk.StringVar(value="ws://localhost:8765")
+        self._me_obs_host_var     = tk.StringVar(value="localhost")
+        self._me_obs_port_var     = tk.StringVar(value="4455")
+        self._me_obs_pass_var     = tk.StringVar(value="")
+        self._me_pitch_var        = tk.StringVar(value="")
+        self._me_mod_var          = tk.StringVar(value="")
+        self._me_sounds_dir_var   = tk.StringVar(value="sounds")
         self._me_http_timeout_var = tk.StringVar(value="3")
+        self._me_music_vol_var    = tk.StringVar(value="1.0")
+        self._me_music_dev_var    = tk.StringVar(value="")
 
         tk.Frame(body, bg=C["border"], height=1).pack(fill="x", padx=12, pady=6)
 
@@ -584,7 +600,6 @@ class HexPadGUI:
     # ── Import / Export ───────────────────────────────────────────────────────
 
     def _me_export_preset(self):
-        """Exporte le preset courant vers un fichier JSON."""
         prog = self._get_current_preset()
         if not prog:
             messagebox.showwarning("Export", "Aucun preset sélectionné."); return
@@ -603,7 +618,6 @@ class HexPadGUI:
             messagebox.showerror("Export", str(e))
 
     def _me_import_preset(self):
-        """Importe un preset depuis un fichier JSON dans le slot courant."""
         path = filedialog.askopenfilename(
             title="Importer un preset",
             filetypes=[("JSON", "*.json"), ("Tous", "*.*")]
@@ -614,23 +628,21 @@ class HexPadGUI:
                 data = json.load(f)
             if not isinstance(data, dict) or "mode" not in data:
                 messagebox.showerror("Import", "Fichier invalide : clé 'mode' manquante."); return
-            # Demande si on écrase le slot courant ou crée un nouveau
             choice = messagebox.askyesnocancel(
                 "Import",
                 f"Importer dans le preset {self._current_prog} (Oui)\n"
                 f"ou créer un nouveau slot (Non) ?"
             )
             if choice is None: return
-            if choice:  # Oui → écraser
+            if choice:
                 key = self._current_prog
-            else:       # Non → nouveau slot
+            else:
                 keys = list(self.config["programs"].keys())
                 key  = str(max(int(k) for k in keys) + 1)
             self.config["programs"][key] = data
             self._save_config()
             self._current_prog = key
             self._build_prog_btns(); self._select_program(key)
-            # Rebuild combobox
             prog_keys   = list(self.config["programs"].keys())
             prog_labels = [f"{k} — {self.config['programs'][k].get('name','')}" for k in prog_keys]
             self._me_prog_map = dict(zip(prog_labels, prog_keys))
@@ -665,6 +677,8 @@ class HexPadGUI:
         self._me_mod_var.set(prog.get("modwheel",""))
         self._me_sounds_dir_var.set(prog.get("sounds_dir","sounds"))
         self._me_http_timeout_var.set(str(prog.get("http_timeout",3)))
+        self._me_music_vol_var.set(str(prog.get("music_volume",1.0)))
+        self._me_music_dev_var.set(prog.get("music_device",""))
         self._me_refresh_mode_fields()
         self._me_build_pad_grid()
         self._me_build_knob_grid()
@@ -693,7 +707,16 @@ class HexPadGUI:
             ent(self._me_obs_pass_var, 16).grid(row=0, column=col, sticky="w"); col+=1
         elif mode in ("sound_preset","music"):
             lbl("Sons dir").grid(row=0, column=col, sticky="w", padx=(0,4)); col+=1
-            ent(self._me_sounds_dir_var, 18).grid(row=0, column=col, sticky="w"); col+=1
+            ent(self._me_sounds_dir_var, 14).grid(row=0, column=col, sticky="w"); col+=1
+            if mode=="music":
+                lbl("Volume").grid(row=0, column=col, sticky="w", padx=(8,4)); col+=1
+                ent(self._me_music_vol_var, 4).grid(row=0, column=col, sticky="w"); col+=1
+                lbl("Device").grid(row=0, column=col, sticky="w", padx=(8,4)); col+=1
+                # liste dynamique des périphériques audio
+                dev_names = [""] + ([d[1] for d in __import__("modules.music_bridge", fromlist=["list_output_devices"]).list_output_devices()] if MUSIC_OK else [])
+                ttk.Combobox(self._me_conn_frame, textvariable=self._me_music_dev_var,
+                    values=dev_names, width=18, state="normal",
+                    style="H.TCombobox").grid(row=0, column=col, sticky="w"); col+=1
         elif mode=="http":
             lbl("Timeout (s)").grid(row=0, column=col, sticky="w", padx=(0,4)); col+=1
             ent(self._me_http_timeout_var, 4).grid(row=0, column=col, sticky="w"); col+=1
@@ -714,12 +737,12 @@ class HexPadGUI:
         pads  = prog.get(pads_key, {})
         show_note = self._me_show_note_var.get() if hasattr(self,"_me_show_note_var") else True
 
-        if   mode=="gamepad":             pad_opts = BTN_OPTIONS
-        elif mode=="macro":               pad_opts = MACRO_OPTIONS
-        elif mode=="obs":                 pad_opts = OBS_ACTIONS
+        if   mode=="gamepad":                  pad_opts = BTN_OPTIONS
+        elif mode=="macro":                    pad_opts = MACRO_OPTIONS
+        elif mode=="obs":                      pad_opts = OBS_ACTIONS
         elif mode in ("sound_preset","music"): pad_opts = None
-        elif mode=="http":                pad_opts = "http"
-        else:                             pad_opts = None
+        elif mode=="http":                     pad_opts = "http"
+        else:                                  pad_opts = None
 
         layout = [notes[4:8], notes[0:4]]
 
@@ -767,9 +790,9 @@ class HexPadGUI:
 
                 elif mode in ("sound_preset","music"):
                     if isinstance(raw, dict):
-                        file_val   = raw.get("file","")
-                        vol_val    = str(raw.get("volume","1.0"))
-                        loop_val   = raw.get("loop", False)
+                        file_val  = raw.get("file","")
+                        vol_val   = str(raw.get("volume","1.0"))
+                        loop_val  = raw.get("loop", False)
                     elif raw=="stop_all":
                         file_val, vol_val, loop_val = "stop_all", "1.0", False
                     else:
@@ -792,7 +815,6 @@ class HexPadGUI:
                         selectcolor=C["btn"], activebackground=C["panel2"]).pack(side="left", padx=4)
 
                 elif mode=="http":
-                    # raw = {"method": "GET", "url": "...", "body": {...}, "headers": {...}}
                     if isinstance(raw, dict):
                         method_val = raw.get("method", "GET")
                         url_val    = raw.get("url", "")
@@ -867,7 +889,12 @@ class HexPadGUI:
             try: prog["obs_port"] = int(self._me_obs_port_var.get())
             except: prog["obs_port"] = 4455
             prog["obs_password"] = self._me_obs_pass_var.get()
-        if mode in ("sound_preset","music"): prog["sounds_dir"] = self._me_sounds_dir_var.get()
+        if mode in ("sound_preset","music"):
+            prog["sounds_dir"] = self._me_sounds_dir_var.get()
+        if mode=="music":
+            try: prog["music_volume"] = float(self._me_music_vol_var.get())
+            except: prog["music_volume"] = 1.0
+            prog["music_device"] = self._me_music_dev_var.get()
         if mode=="http":
             try: prog["http_timeout"] = int(self._me_http_timeout_var.get())
             except: prog["http_timeout"] = 3
@@ -937,6 +964,8 @@ class HexPadGUI:
             for ns, pad in prog.get("pads",{}).items():
                 if isinstance(pad, dict) and not pad.get("url"):
                     errors.append(f"Pad {ns} : URL manquante.")
+        if prog.get("mode")=="music" and not MUSIC_OK:
+            errors.append("pygame et sounddevice sont requis pour le mode music.\npip install pygame sounddevice")
         return errors
 
     def _me_save(self):
