@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 HexPad Themes — palettes dark et light.
+v1.7.0 : palette violet/bleu/blanc
 """
 
 DARK = {
@@ -9,55 +10,58 @@ DARK = {
     "panel":   "#11111f",
     "panel2":  "#16162a",
     "border":  "#1e1e3a",
-    "accent":  "#00ffe7",
-    "accent2": "#7f00ff",
-    "accent3": "#ff006e",
-    "text":    "#c8c8e8",
-    "dim":     "#555577",
-    "green":   "#00ff99",
-    "red":     "#ff4455",
-    "yellow":  "#ffd700",
-    "btn":     "#1a1a30",
-    "pad_off": "#1a1a30",
-    "learn":   "#ff006e",
-    "combo":   "#ffd700",
+    "accent":  "#a855f7",   # violet
+    "accent2": "#3b82f6",   # bleu
+    "accent3": "#f43f5e",
+    "text":    "#ffffff",   # blanc pur
+    "dim":     "#6b7280",
+    "green":   "#22c55e",
+    "red":     "#ef4444",
+    "yellow":  "#fbbf24",
+    "btn":     "#1e1b4b",
+    "pad_off": "#1e1b4b",
+    "learn":   "#f43f5e",
+    "combo":   "#fbbf24",
+    "sel_fg":  "#000000",   # texte sur bouton preset sélectionné
     "console_bg": "#06060e",
-    "console_fg": "#00ffe7",
+    "console_fg": "#a855f7",
     "toggle_icon": "\u2600",
 }
 
 LIGHT = {
     "name":    "light",
-    "bg":      "#f0f0f8",
-    "panel":   "#e2e2f0",
-    "panel2":  "#d8d8ec",
-    "border":  "#b0b0cc",
-    "accent":  "#0055cc",
-    "accent2": "#6600cc",
-    "accent3": "#cc0055",
-    "text":    "#1a1a2e",
-    "dim":     "#8888aa",
-    "green":   "#007744",
-    "red":     "#cc2233",
-    "yellow":  "#aa7700",
-    "btn":     "#c8c8e0",
-    "pad_off": "#c8c8e0",
-    "learn":   "#cc0055",
-    "combo":   "#aa7700",
+    "bg":      "#f5f3ff",
+    "panel":   "#ede9fe",
+    "panel2":  "#ddd6fe",
+    "border":  "#c4b5fd",
+    "accent":  "#7c3aed",   # violet foncé
+    "accent2": "#2563eb",   # bleu
+    "accent3": "#e11d48",
+    "text":    "#1e1b4b",   # quasi-noir violet
+    "dim":     "#6d28d9",
+    "green":   "#16a34a",
+    "red":     "#dc2626",
+    "yellow":  "#d97706",
+    "btn":     "#ddd6fe",
+    "pad_off": "#ddd6fe",
+    "learn":   "#e11d48",
+    "combo":   "#d97706",
+    "sel_fg":  "#ffffff",   # texte sur bouton preset sélectionné
     "console_bg": "#ffffff",
-    "console_fg": "#0055cc",
+    "console_fg": "#7c3aed",
     "toggle_icon": "\u25d0",
 }
 
 MODE_COLORS = {
-    "gamepad":      "#00ffe7",
-    "websocket":    "#7f00ff",
-    "macro":        "#ffd700",
-    "debug":        "#ff006e",
-    "obs":          "#ff6600",
-    "lightfx":      "#ff00aa",
-    "visualizer":   "#00bfff",
-    "sound_preset": "#88ff00",
+    "gamepad":      "#a855f7",
+    "websocket":    "#3b82f6",
+    "macro":        "#fbbf24",
+    "debug":        "#f43f5e",
+    "obs":          "#f97316",
+    "lightfx":      "#ec4899",
+    "visualizer":   "#06b6d4",
+    "sound_preset": "#84cc16",
+    "music":        "#8b5cf6",
 }
 
 
