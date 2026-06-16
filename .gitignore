@@ -11,3 +11,5 @@ venv/
 *.log
 *.tmp
 assets/icon.ico
+
+config.json
