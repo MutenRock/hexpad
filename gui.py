@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-HexPad GUI v2.1.0  — UX simplifiée
-  - Fenêtre unique redimensionnable (plus de selector COMPACT/NORMAL/WIDE au lancement)
+HexPad GUI v2.2.0
+  - Fenêtre unique redimensionnable
   - Mapping Editor en Toplevel dédié (bouton ⚙ dans le header)
   - Console rétractable (toggle ▾/▴)
+  - Panneau TEST intégré (notebook) : MIDI monitor, HTTP, WebSocket, Bridges
   - Mode/taille de fenêtre sauvegardés silencieusement
-  - Architecture inchangée (bridges, dispatcher, midi_listener)
 """
 import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox, filedialog
@@ -28,11 +28,10 @@ try:
 except ImportError:
     MUSIC_OK = False
 
-VERSION = "2.1.0"
+VERSION = "2.2.0"
 
-# Taille par défaut de la fenêtre principale
-DEFAULT_W, DEFAULT_H = 520, 740
-MIN_W,     MIN_H     = 460, 560
+DEFAULT_W, DEFAULT_H = 520, 820
+MIN_W,     MIN_H     = 460, 600
 
 PAD_BANK_A  = [36,37,38,39,40,41,42,43]
 PAD_BANK_B  = [44,45,46,47,48,49,50,51]
@@ -95,7 +94,6 @@ class HexPadGUI:
         self.root.bind("<Configure>", self._on_resize)
 
     def _on_resize(self, event):
-        # Sauvegarde silencieuse de la taille (throttled)
         if event.widget is self.root:
             self.config["window_w"] = event.width
             self.config["window_h"] = event.height
@@ -147,15 +145,26 @@ class HexPadGUI:
         self._build_header(self.root)
         self._build_device_row(self.root)
         self._sep(self.root)
-        self._build_prog_section(self.root)
-        self._sep(self.root)
-        self._build_pad_monitor(self.root)
-        self._sep(self.root)
-        self._build_combos(self.root)
-        self._sep(self.root)
-        self._build_start_stop(self.root)
-        self._sep(self.root)
-        self._build_console_section(self.root)
+        # Notebook : RUN / TEST
+        self._nb = ttk.Notebook(self.root, style="H.TNotebook")
+        self._nb.pack(fill="both", expand=True, padx=0, pady=0)
+        self._tab_run  = tk.Frame(self._nb, bg=self.C["bg"])
+        self._tab_test = tk.Frame(self._nb, bg=self.C["bg"])
+        self._nb.add(self._tab_run,  text="  ▶ RUN  ")
+        self._nb.add(self._tab_test, text="  ⚗ TEST  ")
+        self._build_run_tab(self._tab_run)
+        self._build_test_tab(self._tab_test)
+
+    def _build_run_tab(self, parent):
+        self._build_prog_section(parent)
+        self._sep(parent)
+        self._build_pad_monitor(parent)
+        self._sep(parent)
+        self._build_combos(parent)
+        self._sep(parent)
+        self._build_start_stop(parent)
+        self._sep(parent)
+        self._build_console_section(parent)
 
     # ── Header ────────────────────────────────────────────────────────────────
     def _build_header(self, parent):
@@ -168,7 +177,6 @@ class HexPadGUI:
             fg=C["text"], bg=C["panel"]).pack(side="left")
         tk.Label(hdr, text=f" v{VERSION}", font=("Courier", 7),
             fg=C["dim"], bg=C["panel"]).pack(side="left")
-        # Boutons droite
         tk.Button(hdr, text="✕", font=("Courier", 10, "bold"),
             bg=C["panel"], fg=C["dim"], relief="flat", padx=8,
             cursor="hand2", command=self.on_close).pack(side="right", padx=2)
@@ -178,7 +186,6 @@ class HexPadGUI:
         tk.Button(hdr, text=C["toggle_icon"], font=("Courier", 10),
             bg=C["panel"], fg=C["accent"], relief="flat", padx=8,
             cursor="hand2", command=self._toggle_theme).pack(side="right", padx=2)
-        # Bouton éditeur mapping
         tk.Button(hdr, text="⚙ Mapping", font=("Courier", 8, "bold"),
             bg=C["accent2"], fg=C["bg"], relief="flat", padx=10, pady=2,
             cursor="hand2", command=self._open_editor).pack(side="right", padx=6)
@@ -406,21 +413,17 @@ class HexPadGUI:
     # ── Console rétractable ───────────────────────────────────────────────────
     def _build_console_section(self, parent):
         C = self.C
-        # Barre toggle
         tog_row = tk.Frame(parent, bg=C["bg"])
         tog_row.pack(fill="x", padx=10)
         self._console_toggle_btn = tk.Button(
-            tog_row,
-            text="▾ Console",
+            tog_row, text="▾ Console",
             font=("Courier", 7, "bold"),
             bg=C["bg"], fg=C["dim"],
             relief="flat", padx=4, pady=2,
-            cursor="hand2",
-            anchor="w",
+            cursor="hand2", anchor="w",
             command=self._toggle_console
         )
         self._console_toggle_btn.pack(side="left")
-        # Conteneur console
         self._console_frame = tk.Frame(parent, bg=C["bg"])
         self._console_frame.pack(fill="both", expand=True, padx=10, pady=(0, 8))
         self.console = scrolledtext.ScrolledText(
@@ -473,6 +476,14 @@ class HexPadGUI:
                                     self.root.after(200, b.config, {"bg": self.C["pad_off"], "fg": self.C["dim"]})
                                 if self._learn_target:
                                     self.root.after(0, self._on_learn_received, msg.note)
+                                # Feed test MIDI log if active
+                                if hasattr(self, "_test_midi_log"):
+                                    label = f"note_on  note={msg.note} ({note_name(msg.note)})  vel={msg.velocity}"
+                                    self.root.after(0, self._test_append, label)
+                            elif msg and msg.type == "control_change":
+                                if hasattr(self, "_test_midi_log"):
+                                    label = f"cc       cc={msg.control}  val={msg.value}"
+                                    self.root.after(0, self._test_append, label)
                             time.sleep(0.001)
                 except Exception: time.sleep(1)
         threading.Thread(target=run, daemon=True).start()
@@ -484,6 +495,333 @@ class HexPadGUI:
         btn.config(bg=self.C["panel2"], fg=self.C["dim"])
         self._learn_target = None
         if hasattr(self, "_me_pad_frame"): self._me_build_pad_grid()
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # TEST PANEL
+    # ─────────────────────────────────────────────────────────────────────────
+    def _build_test_tab(self, parent):
+        C = self.C
+        tk.Label(parent, text="  ⚗ TEST — Vérification indépendante des features",
+            font=("Courier", 8, "bold"), fg=C["accent2"], bg=C["bg"]
+        ).pack(anchor="w", padx=12, pady=(10, 4))
+
+        nb = ttk.Notebook(parent, style="H.TNotebook")
+        nb.pack(fill="both", expand=True, padx=8, pady=4)
+
+        # ── Onglet MIDI
+        t_midi = tk.Frame(nb, bg=C["bg"])
+        nb.add(t_midi, text="  MIDI  ")
+        self._build_test_midi(t_midi)
+
+        # ── Onglet HTTP
+        t_http = tk.Frame(nb, bg=C["bg"])
+        nb.add(t_http, text="  HTTP  ")
+        self._build_test_http(t_http)
+
+        # ── Onglet WebSocket
+        t_ws = tk.Frame(nb, bg=C["bg"])
+        nb.add(t_ws, text="  WS  ")
+        self._build_test_ws(t_ws)
+
+        # ── Onglet Bridges
+        t_br = tk.Frame(nb, bg=C["bg"])
+        nb.add(t_br, text="  Bridges  ")
+        self._build_test_bridges(t_br)
+
+    # ── TEST : MIDI monitor ───────────────────────────────────────────────────
+    def _build_test_midi(self, parent):
+        C = self.C
+        row = tk.Frame(parent, bg=C["bg"])
+        row.pack(fill="x", padx=10, pady=8)
+        tk.Label(row, text="Device :", font=("Courier", 8), fg=C["dim"], bg=C["bg"]).pack(side="left")
+        self._test_midi_dev_var = tk.StringVar()
+        devices = mido.get_input_names() or ["Aucun"]
+        cb = ttk.Combobox(row, textvariable=self._test_midi_dev_var,
+            values=devices, width=20, state="readonly", style="H.TCombobox")
+        cb.pack(side="left", padx=6)
+        if devices and devices[0] != "Aucun":
+            self._test_midi_dev_var.set(devices[0])
+        self._test_midi_active = False
+        self._test_midi_btn = tk.Button(row, text="▶ Écouter",
+            font=("Courier", 8, "bold"), bg=C["green"], fg=C["bg"],
+            relief="flat", padx=8, cursor="hand2",
+            command=self._test_midi_toggle)
+        self._test_midi_btn.pack(side="left", padx=6)
+        tk.Button(row, text="✕ Vider", font=("Courier", 8),
+            bg=C["btn"], fg=C["dim"], relief="flat", padx=6, cursor="hand2",
+            command=self._test_clear_midi).pack(side="left")
+        self._test_midi_log = scrolledtext.ScrolledText(
+            parent, bg=C["console_bg"], fg=C["console_fg"],
+            font=("Courier", 8), relief="flat", height=10,
+            insertbackground=C["accent"])
+        self._test_midi_log.pack(fill="both", expand=True, padx=10, pady=(0, 8))
+        self._test_midi_log.config(state="disabled")
+        self._test_append("[MIDI TEST] Sélectionne un device et clique Écouter.")
+
+    def _test_midi_toggle(self):
+        C = self.C
+        if not self._test_midi_active:
+            self._test_midi_active = True
+            self._test_midi_btn.config(text="■ Stop", bg=C["red"], fg="white")
+            self._test_append(f"[MIDI] Écoute sur : {self._test_midi_dev_var.get()}")
+        else:
+            self._test_midi_active = False
+            self._test_midi_btn.config(text="▶ Écouter", bg=C["green"], fg=C["bg"])
+            self._test_append("[MIDI] Arrêt écoute.")
+
+    def _test_clear_midi(self):
+        self._test_midi_log.config(state="normal")
+        self._test_midi_log.delete("1.0", "end")
+        self._test_midi_log.config(state="disabled")
+
+    def _test_append(self, msg):
+        if not hasattr(self, "_test_midi_log"): return
+        if not self._test_midi_active and not msg.startswith("[MIDI TEST]") and not msg.startswith("[MIDI] "): return
+        self._test_midi_log.config(state="normal")
+        ts = time.strftime("%H:%M:%S")
+        self._test_midi_log.insert("end", f"{ts}  {msg}\n")
+        self._test_midi_log.see("end")
+        self._test_midi_log.config(state="disabled")
+
+    # ── TEST : HTTP ───────────────────────────────────────────────────────────
+    def _build_test_http(self, parent):
+        C = self.C
+        f = tk.Frame(parent, bg=C["bg"])
+        f.pack(fill="x", padx=10, pady=8)
+        tk.Label(f, text="Méthode", font=("Courier", 8), fg=C["dim"], bg=C["bg"]).grid(row=0, column=0, sticky="w")
+        self._test_http_method = tk.StringVar(value="GET")
+        ttk.Combobox(f, textvariable=self._test_http_method,
+            values=HTTP_METHODS, width=7, state="readonly",
+            style="H.TCombobox").grid(row=0, column=1, padx=4, sticky="w")
+        tk.Label(f, text="URL", font=("Courier", 8), fg=C["dim"], bg=C["bg"]).grid(row=0, column=2, sticky="w", padx=(8,0))
+        self._test_http_url = tk.StringVar(value="http://localhost:8080/test")
+        tk.Entry(f, textvariable=self._test_http_url,
+            bg=C["btn"], fg=C["accent"], font=("Courier", 9),
+            relief="flat", width=28,
+            insertbackground=C["accent"]).grid(row=0, column=3, padx=4, sticky="ew")
+        f.columnconfigure(3, weight=1)
+        f2 = tk.Frame(parent, bg=C["bg"])
+        f2.pack(fill="x", padx=10, pady=(0, 4))
+        tk.Label(f2, text="Body JSON", font=("Courier", 8), fg=C["dim"], bg=C["bg"]).pack(side="left")
+        self._test_http_body = tk.StringVar(value="")
+        tk.Entry(f2, textvariable=self._test_http_body,
+            bg=C["btn"], fg=C["accent2"], font=("Courier", 9),
+            relief="flat", insertbackground=C["accent"]).pack(side="left", fill="x", expand=True, padx=6)
+        tk.Button(f2, text="▶ Envoyer",
+            font=("Courier", 8, "bold"), bg=C["green"], fg=C["bg"],
+            relief="flat", padx=8, cursor="hand2",
+            command=self._test_http_send).pack(side="left")
+        self._test_http_log = scrolledtext.ScrolledText(
+            parent, bg=C["console_bg"], fg=C["console_fg"],
+            font=("Courier", 8), relief="flat", height=8,
+            insertbackground=C["accent"])
+        self._test_http_log.pack(fill="both", expand=True, padx=10, pady=(4, 8))
+        self._test_http_log.config(state="disabled")
+
+    def _test_http_send(self):
+        import urllib.request, urllib.error
+        method = self._test_http_method.get()
+        url    = self._test_http_url.get().strip()
+        body   = self._test_http_body.get().strip()
+        if not url:
+            self._test_http_append("[ERR] URL vide."); return
+        def do():
+            try:
+                data = body.encode() if body else None
+                req  = urllib.request.Request(url, data=data, method=method)
+                if data: req.add_header("Content-Type", "application/json")
+                with urllib.request.urlopen(req, timeout=5) as r:
+                    resp = r.read().decode(errors="replace")[:500]
+                    self.root.after(0, self._test_http_append,
+                        f"[{r.status}] {resp}")
+            except urllib.error.HTTPError as e:
+                self.root.after(0, self._test_http_append, f"[HTTP {e.code}] {e.reason}")
+            except Exception as e:
+                self.root.after(0, self._test_http_append, f"[ERR] {e}")
+        self._test_http_append(f"→ {method} {url}")
+        threading.Thread(target=do, daemon=True).start()
+
+    def _test_http_append(self, msg):
+        self._test_http_log.config(state="normal")
+        ts = time.strftime("%H:%M:%S")
+        self._test_http_log.insert("end", f"{ts}  {msg}\n")
+        self._test_http_log.see("end")
+        self._test_http_log.config(state="disabled")
+
+    # ── TEST : WebSocket ──────────────────────────────────────────────────────
+    def _build_test_ws(self, parent):
+        C = self.C
+        row = tk.Frame(parent, bg=C["bg"])
+        row.pack(fill="x", padx=10, pady=8)
+        tk.Label(row, text="URL WS :", font=("Courier", 8), fg=C["dim"], bg=C["bg"]).pack(side="left")
+        self._test_ws_url = tk.StringVar(value="ws://localhost:8765")
+        tk.Entry(row, textvariable=self._test_ws_url,
+            bg=C["btn"], fg=C["accent"], font=("Courier", 9),
+            relief="flat", width=24,
+            insertbackground=C["accent"]).pack(side="left", padx=6)
+        self._test_ws_conn_btn = tk.Button(row, text="⚡ Connecter",
+            font=("Courier", 8, "bold"), bg=C["green"], fg=C["bg"],
+            relief="flat", padx=8, cursor="hand2",
+            command=self._test_ws_connect)
+        self._test_ws_conn_btn.pack(side="left")
+        self._test_ws_dot = tk.Label(row, text="●", font=("Courier", 10),
+            fg=C["red"], bg=C["bg"])
+        self._test_ws_dot.pack(side="left", padx=4)
+        send_row = tk.Frame(parent, bg=C["bg"])
+        send_row.pack(fill="x", padx=10, pady=(0, 4))
+        tk.Label(send_row, text="Message :", font=("Courier", 8), fg=C["dim"], bg=C["bg"]).pack(side="left")
+        self._test_ws_msg = tk.StringVar(value='{"action": "ping"}')
+        tk.Entry(send_row, textvariable=self._test_ws_msg,
+            bg=C["btn"], fg=C["accent"], font=("Courier", 9),
+            relief="flat", insertbackground=C["accent"]).pack(side="left", fill="x", expand=True, padx=6)
+        tk.Button(send_row, text="▶ Envoyer",
+            font=("Courier", 8, "bold"), bg=C["accent2"], fg=C["bg"],
+            relief="flat", padx=8, cursor="hand2",
+            command=self._test_ws_send).pack(side="left")
+        self._test_ws_log = scrolledtext.ScrolledText(
+            parent, bg=C["console_bg"], fg=C["console_fg"],
+            font=("Courier", 8), relief="flat", height=8,
+            insertbackground=C["accent"])
+        self._test_ws_log.pack(fill="both", expand=True, padx=10, pady=(4, 8))
+        self._test_ws_log.config(state="disabled")
+        self._test_ws_sock = None
+
+    def _test_ws_connect(self):
+        C = self.C
+        if self._test_ws_sock:
+            try: self._test_ws_sock.close()
+            except: pass
+            self._test_ws_sock = None
+            self._test_ws_conn_btn.config(text="⚡ Connecter", bg=C["green"], fg=C["bg"])
+            self._test_ws_dot.config(fg=C["red"])
+            self._test_ws_append("[WS] Déconnecté.")
+            return
+        url = self._test_ws_url.get().strip()
+        def do():
+            try:
+                import websocket
+                ws = websocket.WebSocket()
+                ws.connect(url, timeout=5)
+                self._test_ws_sock = ws
+                self.root.after(0, self._test_ws_dot.config, {"fg": C["green"]})
+                self.root.after(0, self._test_ws_conn_btn.config,
+                    {"text": "✕ Déconnecter", "bg": C["red"], "fg": "white"})
+                self.root.after(0, self._test_ws_append, f"[WS] Connecté à {url}")
+            except Exception as e:
+                self.root.after(0, self._test_ws_append, f"[ERR] {e}")
+        threading.Thread(target=do, daemon=True).start()
+
+    def _test_ws_send(self):
+        if not self._test_ws_sock:
+            self._test_ws_append("[ERR] Non connecté."); return
+        msg = self._test_ws_msg.get()
+        def do():
+            try:
+                self._test_ws_sock.send(msg)
+                resp = self._test_ws_sock.recv()
+                self.root.after(0, self._test_ws_append, f"→ {msg}")
+                self.root.after(0, self._test_ws_append, f"← {resp}")
+            except Exception as e:
+                self.root.after(0, self._test_ws_append, f"[ERR] {e}")
+        threading.Thread(target=do, daemon=True).start()
+
+    def _test_ws_append(self, msg):
+        self._test_ws_log.config(state="normal")
+        ts = time.strftime("%H:%M:%S")
+        self._test_ws_log.insert("end", f"{ts}  {msg}\n")
+        self._test_ws_log.see("end")
+        self._test_ws_log.config(state="disabled")
+
+    # ── TEST : Bridges ────────────────────────────────────────────────────────
+    def _build_test_bridges(self, parent):
+        C = self.C
+        tk.Label(parent,
+            text="  Teste chaque bridge sans démarrer le listener MIDI.",
+            font=("Courier", 7), fg=C["dim"], bg=C["bg"]
+        ).pack(anchor="w", padx=12, pady=(8, 4))
+
+        # Sélecteur de preset à tester
+        row = tk.Frame(parent, bg=C["bg"])
+        row.pack(fill="x", padx=10, pady=4)
+        tk.Label(row, text="Preset :", font=("Courier", 8), fg=C["dim"], bg=C["bg"]).pack(side="left")
+        self._test_br_prog_var = tk.StringVar(value=self._current_prog)
+        prog_keys   = list(self.config.get("programs", {}).keys())
+        prog_labels = [f"{k} — {self.config['programs'][k].get('name','')}" for k in prog_keys]
+        self._test_br_prog_map = dict(zip(prog_labels, prog_keys))
+        cb = ttk.Combobox(row, textvariable=self._test_br_prog_var,
+            values=prog_labels, width=26, state="readonly", style="H.TCombobox")
+        cb.pack(side="left", padx=6)
+        for label, key in self._test_br_prog_map.items():
+            if key == self._current_prog:
+                self._test_br_prog_var.set(label); break
+
+        # Grille de pads cliquables
+        tk.Label(parent, text="  Cliquer un pad = simuler note_on",
+            font=("Courier", 7, "bold"), fg=C["accent2"], bg=C["bg"]
+        ).pack(anchor="w", padx=12, pady=(6, 2))
+        self._test_pad_frame = tk.Frame(parent, bg=C["bg"])
+        self._test_pad_frame.pack(padx=12, pady=4)
+        self._build_test_pad_grid()
+        cb.bind("<<ComboboxSelected>>", lambda e: self._build_test_pad_grid())
+
+        self._test_br_log = scrolledtext.ScrolledText(
+            parent, bg=C["console_bg"], fg=C["console_fg"],
+            font=("Courier", 8), relief="flat", height=6,
+            insertbackground=C["accent"])
+        self._test_br_log.pack(fill="both", expand=True, padx=10, pady=(4, 8))
+        self._test_br_log.config(state="disabled")
+        self._test_br_append("[BRIDGE TEST] Clique un pad pour simuler un event MIDI.")
+
+    def _build_test_pad_grid(self):
+        C = self.C
+        for w in self._test_pad_frame.winfo_children(): w.destroy()
+        label = self._test_br_prog_var.get()
+        key   = self._test_br_prog_map.get(label, self._current_prog)
+        prog  = self.config["programs"].get(key, {})
+        pads  = prog.get("pads", {})
+        notes = PAD_BANK_A
+        layout = [notes[4:8], notes[0:4]]
+        for row_idx, row_notes in enumerate(layout):
+            for col_idx, note in enumerate(row_notes):
+                ns      = str(note)
+                pad_num = notes.index(note) + 1
+                action  = pads.get(ns, "—")
+                short   = (action if isinstance(action, str) else action.get("action", "?") if isinstance(action, dict) else "?")[:8]
+                btn = tk.Button(
+                    self._test_pad_frame,
+                    text=f"P{pad_num}\n{short}",
+                    font=("Courier", 8, "bold"),
+                    bg=C["pad_off"], fg=C["accent"],
+                    activebackground=C["accent"], activeforeground=C["bg"],
+                    relief="flat", width=7, pady=8, cursor="hand2",
+                    command=lambda n=note, p=prog, k=key: self._test_simulate_pad(n, p, k)
+                )
+                btn.grid(row=row_idx, column=col_idx, padx=3, pady=3)
+
+    def _test_simulate_pad(self, note, prog, key):
+        self._test_br_append(f"[SIM] note_on note={note} ({note_name(note)}) — preset {key}")
+        def do():
+            try:
+                bridge, mode = self._build_bridge(prog)
+                if bridge is None:
+                    self.root.after(0, self._test_br_append, f"[DEBUG] mode={mode}, no bridge")
+                    return
+                d = Dispatcher()
+                d.set_bridge(bridge, mode)
+                import mido as _mido
+                msg = _mido.Message("note_on", note=note, velocity=100)
+                d.dispatch(msg)
+                self.root.after(0, self._test_br_append, f"[OK] dispatché → {mode}")
+            except Exception as e:
+                self.root.after(0, self._test_br_append, f"[ERR] {e}")
+        threading.Thread(target=do, daemon=True).start()
+
+    def _test_br_append(self, msg):
+        self._test_br_log.config(state="normal")
+        ts = time.strftime("%H:%M:%S")
+        self._test_br_log.insert("end", f"{ts}  {msg}\n")
+        self._test_br_log.see("end")
+        self._test_br_log.config(state="disabled")
 
     # ─────────────────────────────────────────────────────────────────────────
     # MAPPING EDITOR — fenêtre Toplevel dédiée
@@ -531,7 +869,6 @@ class HexPadGUI:
         canvas.bind_all("<MouseWheel>",
             lambda e: canvas.yview_scroll(int(-1 * (e.delta / 120)), "units"))
 
-        # ── Sélecteur de preset
         prow = tk.Frame(body, bg=C["bg"])
         prow.pack(fill="x", padx=12, pady=(10, 4))
         tk.Label(prow, text="Preset :", font=("Courier", 9, "bold"),
@@ -556,7 +893,6 @@ class HexPadGUI:
 
         tk.Frame(body, bg=C["border"], height=1).pack(fill="x", padx=12, pady=6)
 
-        # ── Métadonnées (Nom + Mode)
         meta = tk.Frame(body, bg=C["bg"])
         meta.pack(fill="x", padx=12)
         tk.Label(meta, text="Nom", font=("Courier", 8),
@@ -575,7 +911,6 @@ class HexPadGUI:
         mode_cb.grid(row=0, column=3, padx=8, sticky="w")
         mode_cb.bind("<<ComboboxSelected>>", lambda e: self._me_refresh_mode_fields())
 
-        # ── Champs de connexion (contextuel selon mode)
         self._me_conn_frame = tk.Frame(body, bg=C["bg"])
         self._me_conn_frame.pack(fill="x", padx=12, pady=4)
         self._me_ws_url_var       = tk.StringVar(value="ws://localhost:8765")
@@ -591,7 +926,6 @@ class HexPadGUI:
 
         tk.Frame(body, bg=C["border"], height=1).pack(fill="x", padx=12, pady=6)
 
-        # ── Bank A / B
         bank_row = tk.Frame(body, bg=C["bg"])
         bank_row.pack(fill="x", padx=12)
         tk.Label(bank_row, text="BANK", font=("Courier", 9, "bold"),
@@ -650,7 +984,6 @@ class HexPadGUI:
         self._me_loaded = True
         self._me_load_preset()
 
-    # ── Import / Export ───────────────────────────────────────────────────────
     def _me_export_preset(self):
         prog = self._get_current_preset()
         if not prog:
@@ -701,7 +1034,6 @@ class HexPadGUI:
         except Exception as e:
             messagebox.showerror("Import", str(e))
 
-    # ── Editor logic ──────────────────────────────────────────────────────────
     def _me_on_prog_changed(self, event=None):
         label = self._me_prog_var.get()
         key   = self._me_prog_map.get(label, label)
@@ -1056,8 +1388,6 @@ class HexPadGUI:
         self._log(f"[DEL] Preset supprimé")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Point d'entrée
 # ─────────────────────────────────────────────────────────────────────────────
 def main():
     root = tk.Tk()

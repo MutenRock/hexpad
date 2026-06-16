@@ -1,4 +1,7 @@
 @echo off
-title HexPad - WebSocket
-python main.py --program 2
+chcp 65001 >nul
+title HexPad — WebSocket
+cd /d "%~dp0"
+call venv\Scripts\activate.bat
+python main.py --mode websocket
 pause
