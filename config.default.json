@@ -1,0 +1,129 @@
+{
+  "device_name": "MPK mini 3 0",
+  "theme": "dark",
+  "window_mode": "NORMAL",
+  "programs": {
+    "1": {
+      "name": "Gamepad",
+      "mode": "gamepad",
+      "pads": {
+        "36": "btn_1", "37": "btn_2", "38": "btn_3", "39": "btn_4",
+        "40": "btn_5", "41": "btn_6", "42": "btn_7", "43": "btn_8"
+      },
+      "knobs": {
+        "70": "axis_z", "71": "axis_rx", "72": "axis_ry", "73": "axis_rz",
+        "74": "axis_sl0", "75": "axis_sl1"
+      },
+      "pitchwheel": "axis_x",
+      "modwheel":   "axis_y"
+    },
+    "2": {
+      "name": "WebSocket",
+      "mode": "websocket",
+      "ws_url": "ws://localhost:8765"
+    },
+    "3": {
+      "name": "Macros",
+      "mode": "macro",
+      "pads": {
+        "36": "ctrl+z", "37": "ctrl+s", "38": "ctrl+c", "39": "ctrl+v",
+        "40": "ctrl+shift+z", "41": "f5", "42": "f11", "43": "esc"
+      }
+    },
+    "4": {
+      "name": "Debug",
+      "mode": "debug"
+    },
+    "5": {
+      "name": "OBS",
+      "mode": "obs",
+      "obs_host": "localhost",
+      "obs_port": 4455,
+      "obs_password": "",
+      "pads": {
+        "36": {"action": "scene",         "scene":  "Scene"},
+        "37": {"action": "scene",         "scene":  "Gaming"},
+        "38": {"action": "scene",         "scene":  "Cam only"},
+        "39": {"action": "toggle_mute",   "source": "Mic/Aux"},
+        "40": {"action": "toggle_stream"},
+        "41": {"action": "toggle_record"},
+        "42": {"action": "screenshot"},
+        "43": {"action": "toggle_source",  "source": "Webcam"}
+      }
+    },
+    "6": {
+      "name": "RGB",
+      "mode": "lightfx",
+      "backend": "openrgb",
+      "openrgb_host": "localhost",
+      "openrgb_port": 6742,
+      "pads": {
+        "36": {"action": "color",  "r": 255, "g": 0,   "b": 0},
+        "37": {"action": "color",  "r": 0,   "g": 255, "b": 0},
+        "38": {"action": "color",  "r": 0,   "g": 0,   "b": 255},
+        "39": {"action": "color",  "r": 255, "g": 165, "b": 0},
+        "40": {"action": "effect", "effect": "breathing"},
+        "41": {"action": "effect", "effect": "rainbow"},
+        "42": {"action": "off"},
+        "43": {"action": "color",  "r": 255, "g": 0,   "b": 255}
+      }
+    },
+    "7": {
+      "name": "Visualizer",
+      "mode": "visualizer",
+      "show_piano": true,
+      "show_cc": true
+    },
+    "8": {
+      "name": "Sampler",
+      "mode": "sound_preset",
+      "sounds_dir": "sounds",
+      "pads": {
+        "36": {"file": "kick.wav",   "volume": 1.0},
+        "37": {"file": "snare.wav",  "volume": 0.9},
+        "38": {"file": "hihat.wav",  "volume": 0.7},
+        "39": {"file": "clap.wav",   "volume": 0.8},
+        "40": {"file": "bass.wav",   "volume": 1.0, "loop": true},
+        "41": {"file": "melody.wav", "volume": 0.8},
+        "42": {"file": "fx.wav",     "volume": 0.6},
+        "43": "stop_all"
+      }
+    },
+    "9": {
+      "name": "2XKO",
+      "mode": "macro",
+      "pads": {
+        "36": "j", "37": "k", "38": "l", "39": "i",
+        "40": "m", "41": "u", "42": "space", "43": "o"
+      },
+      "pads_bank_b": {
+        "44": "p", "45": "comma", "46": "period", "47": "r",
+        "48": "a", "49": "d", "50": "w", "51": "s"
+      }
+    },
+    "10": {
+      "name": "Music",
+      "mode": "music",
+      "sounds_dir": "sounds",
+      "music_volume": 1.0,
+      "music_device": "",
+      "pads": {}
+    },
+    "11": {
+      "name": "Display",
+      "mode": "display",
+      "display_bg": "#0a0a0a",
+      "display_fg": "#ffffff",
+      "pads": {
+        "36": {"type": "text",  "content": "\u25cf REC",    "color": "#ff2244", "size": 42},
+        "37": {"type": "text",  "content": "\u23f8 PAUSE",  "color": "#ffaa00", "size": 36},
+        "38": {"type": "text",  "content": "\u25a0 STOP",   "color": "#aaaaaa", "size": 36},
+        "39": {"type": "text",  "content": "LIVE",          "color": "#00ff88", "size": 52, "bold": true},
+        "40": {"type": "text",  "content": "Scene 1",       "color": "#a855f7", "size": 28},
+        "41": {"type": "text",  "content": "Scene 2",       "color": "#3b82f6", "size": 28},
+        "42": {"type": "text",  "content": "Scene 3",       "color": "#f59e0b", "size": 28},
+        "43": {"type": "clear"}
+      }
+    }
+  }
+}
