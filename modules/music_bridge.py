@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-HexPad Music Bridge v1.7.0
+HexPad Music Bridge v1.7.1
 Mode "music" : sampler haute qualité avec sélecteur de sortie audio.
 
 Différences vs SoundPresetBridge :
@@ -128,14 +128,15 @@ class MusicBridge:
             sound.set_volume(min(1.0, base_vol * self.volume))
         print(f"[MUSIC] Volume global → {self.volume:.2f}")
 
-    # ── Handle MIDI ───────────────────────────────────────────────────────
+    # ── Interface Dispatcher (on_note / on_cc / on_pitchwheel) ───────────────
 
-    def handle(self, msg):
+    def on_note(self, note: int, velocity: int):
+        """Appelé par le Dispatcher pour note_on et note_off."""
         if not PYGAME_OK or not _mixer_init:
             return
-        key = str(msg.note)
+        key = str(note)
 
-        if msg.type == "note_on" and msg.velocity > 0:
+        if velocity > 0:
             if key not in self.pads:
                 return
             cfg   = self.pads[key]
@@ -150,20 +151,41 @@ class MusicBridge:
                 return
 
             sound, loop, base_vol = self.sounds[key]
-            vel_factor = msg.velocity / 127
+            vel_factor = velocity / 127
             sound.set_volume(min(1.0, base_vol * self.volume * vel_factor))
-
             ch = sound.play(loops=-1 if loop else 0)
             if ch:
                 self.channels[key] = ch
-            print(f"[MUSIC] ▶ {fname}  vel={msg.velocity}")
+            print(f"[MUSIC] ▶ {fname}  vel={velocity}")
 
-        elif msg.type == "note_off" or (msg.type == "note_on" and msg.velocity == 0):
+        else:
+            # note_off
             cfg  = self.pads.get(key, {})
             loop = cfg.get("loop", False) if isinstance(cfg, dict) else False
             if loop and key in self.channels:
                 self.channels[key].stop()
                 print(f"[MUSIC] ■ stop loop note={key}")
+
+    def on_cc(self, control: int, value: int):
+        """CC reçu — non utilisé en mode music (ignoré silencieusement)."""
+        pass
+
+    def on_pitchwheel(self, pitch: int):
+        """Pitchwheel reçu — non utilisé en mode music (ignoré silencieusement)."""
+        pass
+
+    # ── handle(msg) — compat legacy ──────────────────────────────────────────
+
+    def handle(self, msg):
+        """Compatibilité avec l'ancien appel direct handle(mido.Message)."""
+        if msg.type == "note_on":
+            self.on_note(msg.note, msg.velocity)
+        elif msg.type == "note_off":
+            self.on_note(msg.note, 0)
+        elif msg.type == "control_change":
+            self.on_cc(msg.control, msg.value)
+        elif msg.type == "pitchwheel":
+            self.on_pitchwheel(msg.pitch)
 
     # ── Cleanup ────────────────────────────────────────────────────────────
 
