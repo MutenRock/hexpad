@@ -108,6 +108,22 @@
       "music_volume": 1.0,
       "music_device": "",
       "pads": {}
+    },
+    "11": {
+      "name": "Display",
+      "mode": "display",
+      "display_bg": "#0a0a0a",
+      "display_fg": "#ffffff",
+      "pads": {
+        "36": {"type": "text",  "content": "\u25cf REC",    "color": "#ff2244", "size": 42},
+        "37": {"type": "text",  "content": "\u23f8 PAUSE",  "color": "#ffaa00", "size": 36},
+        "38": {"type": "text",  "content": "\u25a0 STOP",   "color": "#aaaaaa", "size": 36},
+        "39": {"type": "text",  "content": "LIVE",          "color": "#00ff88", "size": 52, "bold": true},
+        "40": {"type": "text",  "content": "Scene 1",       "color": "#a855f7", "size": 28},
+        "41": {"type": "text",  "content": "Scene 2",       "color": "#3b82f6", "size": 28},
+        "42": {"type": "text",  "content": "Scene 3",       "color": "#f59e0b", "size": 28},
+        "43": {"type": "clear"}
+      }
     }
   }
 }
