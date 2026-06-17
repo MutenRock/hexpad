@@ -28,7 +28,7 @@ Cela ouvre une **fenêtre de pré-lancement** avec 3 choix :
 |---|---|
 | **Simple Manette AKAI** | Détecte automatiquement le MPK/Akai et le transforme en manette vJoy |
 | **HexPad complet** | Ouvre l'interface complète avec presets, mapping editor, OBS, HTTP, sampler, RGB... |
-| **Debug / Test** | Ouvre une fenêtre séparée pour tester MIDI brut, HTTP et WebSocket |
+| **Debug / Test** | Ouvre une fenêtre séparée pour tester MIDI brut, AKAI/SysEx, HTTP et WebSocket |
 
 ---
 
@@ -80,6 +80,19 @@ Le mode `simple_gamecontroller.py` est pensé pour jouer sans toucher au Mapping
 - affichage clair : rouge = pas de pad, bleu = pad prêt, vert = manette active.
 
 Pré-requis : vJoy doit être installé et actif pour que Windows voie la manette virtuelle.
+
+---
+
+## Debug / Test
+
+`debug_test.py` regroupe les tests qui ne doivent pas polluer HexPad complet :
+
+- **MIDI RAW** : écoute brute des notes, CC, pitchwheel et messages SysEx reçus ;
+- **AKAI / SYSEX** : sélection de sortie MIDI, Identity Request, envoi de SysEx hex brut, test texte expérimental avec header configurable ;
+- **HTTP** : requête GET/POST/PUT/PATCH/DELETE rapide ;
+- **WebSocket** : connexion et envoi de message.
+
+Pour tester l'écran/afficheur Akai : ouvre `Debug / Test`, lance l'écoute dans `MIDI RAW` sur l'input Akai, puis utilise `AKAI / SYSEX` sur l'output Akai. Si rien ne s'affiche, il faudra capturer le protocole écran exact du modèle.
 
 ---
 
