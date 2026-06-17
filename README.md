@@ -14,13 +14,39 @@
 
 ---
 
+## Lancement recommandé
+
+Sous Windows, double-clique sur :
+
+```bat
+launch.bat
+```
+
+Cela ouvre une **fenêtre de pré-lancement** avec 3 choix :
+
+| Entrée | Usage |
+|---|---|
+| **Simple Manette AKAI** | Détecte automatiquement le MPK/Akai et le transforme en manette vJoy |
+| **HexPad complet** | Ouvre l'interface complète avec presets, mapping editor, OBS, HTTP, sampler, RGB... |
+| **Debug / Test** | Ouvre une fenêtre séparée pour tester MIDI brut, HTTP et WebSocket |
+
+---
+
 ## Lancer en local avec Python
 
 ```bat
 git clone https://github.com/MutenRock/hexpad.git
 cd hexpad
 pip install -r requirements.txt
-python gui.py
+python launcher.py
+```
+
+Entrées directes possibles :
+
+```bat
+python simple_gamecontroller.py  :: mode manette automatique
+python gui.py                    :: HexPad complet
+python debug_test.py             :: tests séparés
 ```
 
 Au premier lancement, HexPad crée automatiquement un `config.json` local si le fichier n'existe pas encore. Ce fichier est volontairement ignoré par git, car il contient tes réglages machine : nom du contrôleur MIDI, taille de fenêtre, thème, sortie audio, presets modifiés, OBS, etc.
@@ -35,14 +61,29 @@ Pour repartir de zéro :
 
 ```bat
 del config.json
-python gui.py
+python launcher.py
 ```
 
 HexPad recréera une configuration propre depuis les valeurs par défaut.
 
 ---
 
-## Modes disponibles
+## Mode Simple Manette AKAI
+
+Le mode `simple_gamecontroller.py` est pensé pour jouer sans toucher au Mapping Editor :
+
+- auto-détection AKAI / MPK / pad MIDI ;
+- lancement automatique dès que le contrôleur est vu ;
+- mapping direct vers vJoy device 1 ;
+- pads 1-8 → boutons 1-8 ;
+- joystick MPK pitch/mod → axes X/Y ;
+- affichage clair : rouge = pas de pad, bleu = pad prêt, vert = manette active.
+
+Pré-requis : vJoy doit être installé et actif pour que Windows voie la manette virtuelle.
+
+---
+
+## Modes disponibles dans HexPad complet
 
 | Mode | Description |
 |---|---|
@@ -80,7 +121,7 @@ Extrait minimal :
 }
 ```
 
-Si ton MPK apparaît sous un autre nom Windows, ouvre HexPad puis utilise le bouton `↺` dans la ligne device, ou modifie `device_name` dans `config.json`.
+Si ton MPK apparaît sous un autre nom Windows, utilise `Debug / Test` ou le bouton `↺` dans HexPad complet.
 
 ---
 
@@ -116,7 +157,13 @@ Le binaire est généré dans `dist/HexPad.exe`.
 
 ## Dépannage rapide
 
-**La GUI ne se lance pas ou se ferme direct**
+**La fenêtre de pré-lancement ne s'ouvre pas**
+
+```bat
+python launcher.py 2>&1 | more
+```
+
+**La GUI complète ne se lance pas ou se ferme direct**
 
 ```bat
 python gui.py 2>&1 | more
@@ -132,7 +179,7 @@ Le fichier cassé sera sauvegardé en `config.backup-YYYYMMDD-HHMMSS.json`, puis
 
 **vJoy non activé**
 
-Le mode `gamepad` nécessite vJoy installé et activé. Les autres modes peuvent fonctionner sans vJoy.
+Le mode `gamepad` et le mode **Simple Manette AKAI** nécessitent vJoy installé et activé. Les autres modes peuvent fonctionner sans vJoy.
 
 **OBS ne répond pas**
 
