@@ -1,5 +1,20 @@
 # Changelog — HexPad
 
+## v2.4.0 — 2026-06-17
+
+### Play Sound / Studio
+- `studio_play.py` — nouveau mode pour brancher l'Akai et jouer directement du son.
+- Mini-synthé interne temps réel avec `sounddevice` + `numpy`.
+- Choix de l'input MIDI et de la sortie audio depuis l'interface.
+- Presets intégrés : `Piano Bell`, `Bass`, `Lead`, `Soft Pad`, `Drums`.
+- Volume contrôlable depuis l'interface et via CC1/CC7.
+- Boutons de lancement optionnels pour Carla, LMMS, VCV Rack, BespokeSynth.
+- Lancement optionnel de FluidSynth avec un fichier SoundFont `.sf2`.
+- `launcher.py` ajoute l'entrée `PLAY SOUND / STUDIO` en haut du pré-lanceur.
+- `requirements.txt` ajoute `numpy`.
+
+---
+
 ## v2.3.2 — 2026-06-17
 
 ### MPK Mini MK3 display test
