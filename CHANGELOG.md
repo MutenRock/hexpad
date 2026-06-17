@@ -1,5 +1,19 @@
 # Changelog — HexPad
 
+## v2.3.0 — 2026-06-17
+
+### Simplification UX
+- `launcher.py` — nouvelle fenêtre de pré-lancement avec trois entrées : Simple Manette AKAI, HexPad complet, Debug/Test.
+- `launch.bat` ouvre maintenant le pré-lanceur au lieu de lancer directement la GUI complète.
+- `simple_gamecontroller.py` — mode simple dédié : auto-détecte AKAI/MPK, lance vJoy gamecontroller automatiquement, pads 1-8 vers boutons 1-8, joystick MPK vers axes X/Y.
+- `debug_test.py` — fenêtre séparée pour MIDI raw monitor, HTTP test et WebSocket test.
+
+### Gamepad fix
+- `modules/gamepad.py` expose désormais `on_note`, `on_cc` et `on_pitchwheel`, compatibles avec `Dispatcher v2`.
+- `stop()` relâche les boutons vJoy mappés à l'arrêt.
+
+---
+
 ## v2.2.3 — 2026-06-17
 
 ### Device presence UX
