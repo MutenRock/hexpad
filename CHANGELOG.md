@@ -1,5 +1,16 @@
 # Changelog — HexPad
 
+## v2.3.2 — 2026-06-17
+
+### MPK Mini MK3 display test
+- `modules/mpk_mini_mk3_display.py` — nouveau builder SysEx pour preset RAM MPK Mini MK3.
+- Construction du message Akai complet : `F0 47 7F 49 64 <len_hi> <len_lo> <preset 246 bytes> F7`.
+- `debug_test.py` ajoute un test réel `MPK Mini MK3 OLED - preset RAM`.
+- Le test permet de modifier le nom de programme et les noms des 8 knobs, puis d'envoyer le preset RAM au contrôleur.
+- Important : l'écran peut ne changer qu'après action côté MPK, par exemple tourner un knob ou changer de programme, selon firmware.
+
+---
+
 ## v2.3.1 — 2026-06-17
 
 ### AKAI / SysEx debug
