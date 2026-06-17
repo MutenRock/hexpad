@@ -4,7 +4,7 @@ import tkinter as tk
 from modules.config_defaults import ensure_local_config
 from modules.themes import get as get_theme
 
-VERSION = "2.3.0"
+VERSION = "2.4.0"
 
 
 class HexPadLauncher:
@@ -13,7 +13,7 @@ class HexPadLauncher:
         self.root = root
         self.C = get_theme("dark")
         root.title(f"HexPad Launcher v{VERSION}")
-        root.geometry("420x360")
+        root.geometry("440x430")
         root.resizable(False, False)
         root.configure(bg=self.C["bg"])
         self._next_script = None
@@ -33,9 +33,10 @@ class HexPadLauncher:
         body = tk.Frame(self.root, bg=C["bg"], pady=18)
         body.pack(fill="both", expand=True, padx=18)
 
-        self._big_button(body, "SIMPLE MANETTE AKAI", "Auto-detect MPK/Akai vers vJoy gamecontroller", C["green"], lambda: self._launch("simple_gamecontroller.py"))
+        self._big_button(body, "PLAY SOUND / STUDIO", "Akai -> son direct, preset, volume, sortie audio", C["green"], lambda: self._launch("studio_play.py"))
+        self._big_button(body, "SIMPLE MANETTE AKAI", "Auto-detect MPK/Akai vers vJoy gamecontroller", C["accent2"], lambda: self._launch("simple_gamecontroller.py"))
         self._big_button(body, "HEXPAD COMPLET", "Tous les presets : macros, OBS, HTTP, sampler, RGB", C["accent"], lambda: self._launch("gui.py"))
-        self._big_button(body, "DEBUG / TEST", "MIDI raw monitor, HTTP test, WebSocket test separes", C["accent2"], lambda: self._launch("debug_test.py"))
+        self._big_button(body, "DEBUG / TEST", "MIDI raw monitor, AKAI/SysEx, HTTP, WebSocket", C["btn"], lambda: self._launch("debug_test.py"))
 
         foot = tk.Frame(self.root, bg=C["bg"], pady=8)
         foot.pack(fill="x")
@@ -45,7 +46,7 @@ class HexPadLauncher:
         C = self.C
         wrap = tk.Frame(parent, bg=C["bg"])
         wrap.pack(fill="x", pady=6)
-        tk.Button(wrap, text=title, bg=color, fg=C["bg"], relief="flat", font=("Courier", 11, "bold"), pady=9, cursor="hand2", command=cmd).pack(fill="x")
+        tk.Button(wrap, text=title, bg=color, fg=C["bg"] if color != C["btn"] else C["accent"], relief="flat", font=("Courier", 11, "bold"), pady=9, cursor="hand2", command=cmd).pack(fill="x")
         tk.Label(wrap, text=subtitle, fg=C["dim"], bg=C["bg"], font=("Courier", 8), anchor="w").pack(fill="x", pady=(2, 0))
 
 
