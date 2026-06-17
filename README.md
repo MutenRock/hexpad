@@ -88,11 +88,19 @@ Pré-requis : vJoy doit être installé et actif pour que Windows voie la manett
 `debug_test.py` regroupe les tests qui ne doivent pas polluer HexPad complet :
 
 - **MIDI RAW** : écoute brute des notes, CC, pitchwheel et messages SysEx reçus ;
-- **AKAI / SYSEX** : sélection de sortie MIDI, Identity Request, envoi de SysEx hex brut, test texte expérimental avec header configurable ;
+- **AKAI / SYSEX** : sortie MIDI, Identity Request, SysEx brut, test texte expérimental et test réel MPK Mini MK3 par preset RAM ;
 - **HTTP** : requête GET/POST/PUT/PATCH/DELETE rapide ;
 - **WebSocket** : connexion et envoi de message.
 
-Pour tester l'écran/afficheur Akai : ouvre `Debug / Test`, lance l'écoute dans `MIDI RAW` sur l'input Akai, puis utilise `AKAI / SYSEX` sur l'output Akai. Si rien ne s'affiche, il faudra capturer le protocole écran exact du modèle.
+Pour tester l'écran/afficheur Akai MPK Mini MK3 :
+
+1. Ouvre `Debug / Test`.
+2. Onglet `AKAI / SYSEX` : choisis l'output Akai.
+3. Dans `MPK Mini MK3 OLED - preset RAM`, clique `Envoyer preset RAM`.
+4. Tourne un knob ou change de programme sur le MPK pour forcer l'affichage.
+5. Clique ensuite `Envoyer noms knobs`, puis tourne les knobs K1-K8.
+
+Note : ce test n'envoie pas un simple texte libre ; il envoie un preset RAM Akai complet. C'est le comportement actuellement le plus plausible pour le MPK Mini MK3.
 
 ---
 
