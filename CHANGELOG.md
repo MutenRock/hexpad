@@ -1,5 +1,16 @@
 # Changelog — HexPad
 
+## v2.3.1 — 2026-06-17
+
+### AKAI / SysEx debug
+- `debug_test.py` ajoute un onglet `AKAI / SYSEX`.
+- Selection d'output MIDI separee de l'input MIDI RAW.
+- Bouton `Identity Request` pour verifier la sortie MIDI et observer une reponse dans MIDI RAW.
+- Envoi de SysEx brut en hexadecimal (`F0 ... F7`).
+- Test texte experimental avec header configurable pour explorer le controle de l'ecran/afficheur Akai sans hardcoder un protocole non verifie.
+
+---
+
 ## v2.3.0 — 2026-06-17
 
 ### Simplification UX
