@@ -1,6 +1,6 @@
 # ⬡ HexPad v2
 
-> Transforme ton **MPK Mini** ou tout contrôleur MIDI USB en gamepad, macros, contrôleur OBS, sampler, contrôleur HTTP/WebSocket, visualizer et bien plus.
+> Transforme ton **MPK Mini** ou tout contrôleur MIDI USB en gamepad, macros, contrôleur OBS, sampler, contrôleur HTTP/WebSocket, mini-synthé, visualizer et bien plus.
 
 ![platform](https://img.shields.io/badge/platform-Windows-blue)
 ![python](https://img.shields.io/badge/python-3.10%2B-a855f7)
@@ -22,10 +22,11 @@ Sous Windows, double-clique sur :
 launch.bat
 ```
 
-Cela ouvre une **fenêtre de pré-lancement** avec 3 choix :
+Cela ouvre une **fenêtre de pré-lancement** avec 4 choix :
 
 | Entrée | Usage |
 |---|---|
+| **Play Sound / Studio** | Branche l'Akai, choisis un preset, choisis la sortie audio, joue directement |
 | **Simple Manette AKAI** | Détecte automatiquement le MPK/Akai et le transforme en manette vJoy |
 | **HexPad complet** | Ouvre l'interface complète avec presets, mapping editor, OBS, HTTP, sampler, RGB... |
 | **Debug / Test** | Ouvre une fenêtre séparée pour tester MIDI brut, AKAI/SysEx, HTTP et WebSocket |
@@ -44,9 +45,10 @@ python launcher.py
 Entrées directes possibles :
 
 ```bat
-python simple_gamecontroller.py  :: mode manette automatique
-python gui.py                    :: HexPad complet
-python debug_test.py             :: tests séparés
+python studio_play.py             :: jouer du son directement
+python simple_gamecontroller.py   :: mode manette automatique
+python gui.py                     :: HexPad complet
+python debug_test.py              :: tests séparés
 ```
 
 Au premier lancement, HexPad crée automatiquement un `config.json` local si le fichier n'existe pas encore. Ce fichier est volontairement ignoré par git, car il contient tes réglages machine : nom du contrôleur MIDI, taille de fenêtre, thème, sortie audio, presets modifiés, OBS, etc.
@@ -65,6 +67,24 @@ python launcher.py
 ```
 
 HexPad recréera une configuration propre depuis les valeurs par défaut.
+
+---
+
+## Mode Play Sound / Studio
+
+`studio_play.py` est fait pour le cas simple : **je branche l'Akai et je veux m'amuser à faire du son**.
+
+Fonctions incluses :
+
+- auto-détection de l'input MIDI Akai / MPK ;
+- choix de la sortie audio via `sounddevice` ;
+- mini-synthé interne temps réel ;
+- presets : `Piano Bell`, `Bass`, `Lead`, `Soft Pad`, `Drums` ;
+- volume contrôlable depuis l'interface, et via CC1/CC7 si le contrôleur l'envoie ;
+- boutons de lancement pour outils externes si installés : Carla, LMMS, VCV Rack, BespokeSynth ;
+- lancement optionnel de FluidSynth avec un fichier `.sf2`.
+
+Ce mode ne remplace pas un DAW complet : il sert de point d'entrée fun et rapide. Pour composer sérieusement, utilise plutôt LMMS/Ardour/Carla en complément.
 
 ---
 
@@ -167,6 +187,7 @@ Le binaire est généré dans `dist/HexPad.exe`.
 ## Dépendances principales
 
 - `mido` + `python-rtmidi` — MIDI
+- `sounddevice` + `numpy` — mini-synthé Play Sound et choix de sortie audio
 - `pyvjoy` — gamepad virtuel
 - `pynput` — clavier/souris
 - `obsws-python` — OBS WebSocket 5
@@ -183,6 +204,15 @@ Le binaire est généré dans `dist/HexPad.exe`.
 ```bat
 python launcher.py 2>&1 | more
 ```
+
+**Le mode Play Sound ne sort pas de son**
+
+```bat
+pip install sounddevice numpy
+python studio_play.py
+```
+
+Vérifie ensuite que la bonne sortie audio est sélectionnée dans `Audio output`.
 
 **La GUI complète ne se lance pas ou se ferme direct**
 
