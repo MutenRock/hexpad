@@ -1,4 +1,4 @@
-# HexPad v2 — dépendances
+# HexPad v2 - dependances
 mido[ports-rtmidi]
 python-rtmidi
 pyvjoy
@@ -8,5 +8,6 @@ obsws-python
 openrgb-python
 pygame
 sounddevice
+numpy
 Pillow
 pyinstaller>=6.0
