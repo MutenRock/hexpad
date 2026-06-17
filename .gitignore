@@ -13,3 +13,6 @@ venv/
 assets/icon.ico
 
 config.json
+config.backup.json
+config.backup-*.json
+*.backup.json
