@@ -6,9 +6,10 @@ from tkinter import ttk, scrolledtext
 
 import mido
 
+from modules.mpk_mini_mk3_display import build_display_sysex_data, format_sysex
 from modules.themes import get as get_theme
 
-VERSION = "2.3.1"
+VERSION = "2.3.2"
 HTTP_METHODS = ["GET", "POST", "PUT", "DELETE", "PATCH"]
 
 
@@ -21,8 +22,8 @@ class DebugTestWindow:
         self.ws_sock = None
 
         root.title(f"HexPad Debug / Test v{VERSION}")
-        root.geometry("760x660")
-        root.minsize(600, 500)
+        root.geometry("800x700")
+        root.minsize(620, 520)
         root.configure(bg=self.C["bg"])
         root.protocol("WM_DELETE_WINDOW", self.close)
         self._build()
@@ -165,10 +166,30 @@ class DebugTestWindow:
         tk.Button(row, text="Identity Request", bg=C["accent2"], fg=C["bg"], relief="flat", command=self.send_identity_request).pack(side="left", padx=4)
 
         info = (
-            "Test sortie MIDI/SysEx pour l'Akai. Le controle exact de l'ecran MPK est firmware-specific :\n"
-            "commence par Identity Request + MIDI RAW pour verifier que l'output et les reponses SysEx fonctionnent."
+            "L'ecran du MPK Mini MK3 ne semble pas accepter un texte libre direct.\n"
+            "Test utile : envoyer un preset RAM Akai complet, puis tourner un knob / changer de programme pour forcer l'affichage."
         )
         tk.Label(parent, text=info, fg=C["dim"], bg=C["bg"], justify="left", font=("Courier", 8)).pack(anchor="w", padx=12, pady=(0, 8))
+
+        mk3 = tk.LabelFrame(parent, text=" MPK Mini MK3 OLED - preset RAM ", bg=C["bg"], fg=C["accent"], font=("Courier", 8, "bold"))
+        mk3.pack(fill="x", padx=10, pady=4)
+        line0 = tk.Frame(mk3, bg=C["bg"])
+        line0.pack(fill="x", padx=8, pady=(8, 2))
+        tk.Label(line0, text="Program", fg=C["dim"], bg=C["bg"]).pack(side="left")
+        self.mk3_program_var = tk.StringVar(value="HEXPAD READY")
+        self._entry(line0, self.mk3_program_var, 24).pack(side="left", padx=8)
+        tk.Button(line0, text="Envoyer preset RAM", bg=C["green"], fg=C["bg"], relief="flat", command=self.send_mpk_mk3_display_preset).pack(side="left", padx=4)
+
+        line1 = tk.Frame(mk3, bg=C["bg"])
+        line1.pack(fill="x", padx=8, pady=(2, 8))
+        self.mk3_knob_vars = []
+        defaults = ["Axis X", "Axis Y", "K3", "K4", "K5", "K6", "K7", "K8"]
+        for i, name in enumerate(defaults, start=1):
+            var = tk.StringVar(value=name)
+            self.mk3_knob_vars.append(var)
+            tk.Label(line1, text=f"K{i}", fg=C["dim"], bg=C["bg"]).pack(side="left")
+            self._entry(line1, var, 8).pack(side="left", padx=(2, 5))
+        tk.Button(line1, text="Envoyer noms knobs", bg=C["accent"], fg=C["bg"], relief="flat", command=self.send_mpk_mk3_knob_names).pack(side="left", padx=4)
 
         raw = tk.LabelFrame(parent, text=" SysEx brut ", bg=C["bg"], fg=C["accent"], font=("Courier", 8, "bold"))
         raw.pack(fill="x", padx=10, pady=4)
@@ -176,26 +197,25 @@ class DebugTestWindow:
         self._entry(raw, self.sysex_raw_var, 72).pack(side="left", fill="x", expand=True, padx=8, pady=8)
         tk.Button(raw, text="Envoyer", bg=C["green"], fg=C["bg"], relief="flat", command=self.send_raw_sysex).pack(side="left", padx=8)
 
-        text_box = tk.LabelFrame(parent, text=" Texte ecran experimental ", bg=C["bg"], fg=C["accent"], font=("Courier", 8, "bold"))
+        text_box = tk.LabelFrame(parent, text=" Texte ecran experimental brut ", bg=C["bg"], fg=C["accent"], font=("Courier", 8, "bold"))
         text_box.pack(fill="x", padx=10, pady=4)
-        line1 = tk.Frame(text_box, bg=C["bg"])
-        line1.pack(fill="x", padx=8, pady=(8, 2))
-        tk.Label(line1, text="Header", fg=C["dim"], bg=C["bg"]).pack(side="left")
-        self.sysex_header_var = tk.StringVar(value="47 7F 7C")
-        self._entry(line1, self.sysex_header_var, 24).pack(side="left", padx=8)
-        tk.Label(line1, text="payload ASCII 7-bit", fg=C["dim"], bg=C["bg"]).pack(side="left")
-
         line2 = tk.Frame(text_box, bg=C["bg"])
-        line2.pack(fill="x", padx=8, pady=(2, 8))
-        tk.Label(line2, text="Texte", fg=C["dim"], bg=C["bg"]).pack(side="left")
-        self.sysex_text_var = tk.StringVar(value="HEXPAD TEST")
-        self._entry(line2, self.sysex_text_var, 40).pack(side="left", fill="x", expand=True, padx=8)
-        tk.Button(line2, text="Tester", bg=C["accent"], fg=C["bg"], relief="flat", command=self.send_experimental_text).pack(side="left")
+        line2.pack(fill="x", padx=8, pady=(8, 2))
+        tk.Label(line2, text="Header", fg=C["dim"], bg=C["bg"]).pack(side="left")
+        self.sysex_header_var = tk.StringVar(value="47 7F 49 64")
+        self._entry(line2, self.sysex_header_var, 24).pack(side="left", padx=8)
+        tk.Label(line2, text="payload ASCII 7-bit", fg=C["dim"], bg=C["bg"]).pack(side="left")
 
-        tk.Label(parent, text="Note : si rien ne s'affiche, ce n'est pas forcement une erreur : il faudra capturer/identifier le protocole ecran exact.", fg=C["dim"], bg=C["bg"], justify="left", font=("Courier", 8)).pack(anchor="w", padx=12, pady=(4, 0))
+        line3 = tk.Frame(text_box, bg=C["bg"])
+        line3.pack(fill="x", padx=8, pady=(2, 8))
+        tk.Label(line3, text="Texte", fg=C["dim"], bg=C["bg"]).pack(side="left")
+        self.sysex_text_var = tk.StringVar(value="HEXPAD TEST")
+        self._entry(line3, self.sysex_text_var, 40).pack(side="left", fill="x", expand=True, padx=8)
+        tk.Button(line3, text="Tester", bg=C["btn"], fg=C["accent"], relief="flat", command=self.send_experimental_text).pack(side="left")
+
         self.sysex_log = self._logbox(parent)
         self.refresh_devices()
-        self._append(self.sysex_log, "Pret. Selectionne l'output AKAI puis envoie Identity Request ou un SysEx brut.")
+        self._append(self.sysex_log, "Pret. Selectionne l'output AKAI puis teste d'abord 'Envoyer preset RAM'.")
 
     def _hex_to_bytes(self, text):
         clean = text.replace(",", " ").replace("0x", " ").replace("0X", " ")
@@ -225,7 +245,7 @@ class DebugTestWindow:
                 port.send(msg)
             as_hex = "F0 " + " ".join(f"{b:02X}" for b in data) + " F7"
             self._append(self.sysex_log, f"[{label}] -> {out}")
-            self._append(self.sysex_log, as_hex)
+            self._append(self.sysex_log, as_hex[:1000] + (" ..." if len(as_hex) > 1000 else ""))
         except Exception as e:
             self._append(self.sysex_log, f"[ERR] {e}")
 
@@ -247,6 +267,26 @@ class DebugTestWindow:
             text = self.sysex_text_var.get().encode("ascii", errors="replace")[:32]
             payload = [b & 0x7F for b in text]
             self._send_sysex_data(header + payload, "Text experimental")
+        except Exception as e:
+            self._append(self.sysex_log, f"[ERR] {e}")
+
+    def send_mpk_mk3_display_preset(self):
+        try:
+            name = self.mk3_program_var.get().strip() or "HEXPAD"
+            data = build_display_sysex_data(program_name=name)
+            self._send_sysex_data(data, "MPK Mini MK3 preset RAM")
+            self._append(self.sysex_log, "Tourne un knob ou change de programme sur le MPK pour verifier l'affichage.")
+        except Exception as e:
+            self._append(self.sysex_log, f"[ERR] {e}")
+
+    def send_mpk_mk3_knob_names(self):
+        try:
+            name = self.mk3_program_var.get().strip() or "HEXPAD"
+            knobs = [v.get().strip() or f"K{i}" for i, v in enumerate(self.mk3_knob_vars, start=1)]
+            data = build_display_sysex_data(program_name=name, knob_names=knobs)
+            self._send_sysex_data(data, "MPK Mini MK3 knob names")
+            self._append(self.sysex_log, "Tourne les knobs K1-K8 : l'ecran devrait montrer les noms envoyes si le firmware accepte le preset RAM.")
+            self._append(self.sysex_log, format_sysex(data)[:1000] + " ...")
         except Exception as e:
             self._append(self.sysex_log, f"[ERR] {e}")
 
