@@ -1,5 +1,15 @@
 # Changelog — HexPad
 
+## v2.2.3 — 2026-06-17
+
+### Device presence UX
+- `sitecustomize.py` surveille maintenant les entrées MIDI pendant que la GUI tourne.
+- Si un MPK/pad est branché, le device est sélectionné automatiquement dans la première combobox.
+- Le point de statut passe en bleu quand un pad est détecté mais que le mode n'est pas encore lancé.
+- Le bouton START affiche `PAD READY` ou `NO PAD` pour éviter l'ambiguïté.
+
+---
+
 ## v2.2.2 — 2026-06-17
 
 ### Fix Windows encoding
