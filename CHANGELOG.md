@@ -1,5 +1,14 @@
 # Changelog — HexPad
 
+## v2.2.2 — 2026-06-17
+
+### Fix Windows encoding
+- `modules/config_defaults.py` réécrit désormais toujours `config.json` en JSON ASCII-safe (`ensure_ascii=True`).
+- Évite l'erreur Windows `charmap codec can't decode byte ...` quand un ancien chemin lit la config sans encodage explicite.
+- Le bootstrap tente aussi une lecture `cp1252` en fallback avant de sauvegarder/régénérer une config cassée.
+
+---
+
 ## v2.2.1 — 2026-06-17
 
 ### Config bootstrap
