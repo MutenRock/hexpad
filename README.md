@@ -1,6 +1,6 @@
 # ⬡ HexPad v2
 
-> Transforme ton **MPK Mini** (ou tout contrôleur MIDI USB) en gamepad, macros, contrôleur OBS, sampler et bien plus.
+> Transforme ton **MPK Mini** ou tout contrôleur MIDI USB en gamepad, macros, contrôleur OBS, sampler, contrôleur HTTP/WebSocket, visualizer et bien plus.
 
 ![platform](https://img.shields.io/badge/platform-Windows-blue)
 ![python](https://img.shields.io/badge/python-3.10%2B-a855f7)
@@ -14,71 +14,126 @@
 
 ---
 
+## Lancer en local avec Python
+
+```bat
+git clone https://github.com/MutenRock/hexpad.git
+cd hexpad
+pip install -r requirements.txt
+python gui.py
+```
+
+Au premier lancement, HexPad crée automatiquement un `config.json` local si le fichier n'existe pas encore. Ce fichier est volontairement ignoré par git, car il contient tes réglages machine : nom du contrôleur MIDI, taille de fenêtre, thème, sortie audio, presets modifiés, OBS, etc.
+
+Pour créer ou réparer manuellement la config :
+
+```bat
+python bootstrap_config.py
+```
+
+Pour repartir de zéro :
+
+```bat
+del config.json
+python gui.py
+```
+
+HexPad recréera une configuration propre depuis les valeurs par défaut.
+
+---
+
 ## Modes disponibles
 
 | Mode | Description |
 |---|---|
-| `gamepad` | Émule une manette vJoy (axes + boutons) |
-| `macro` | Lance des raccourcis clavier |
-| `obs` | Contrôle OBS Studio (scènes, mute, stream…) |
+| `gamepad` | Émule une manette vJoy : axes, boutons, pitchwheel/modwheel |
+| `macro` | Lance des raccourcis clavier ou des séquences de touches |
+| `obs` | Contrôle OBS Studio via obs-websocket v5 |
 | `websocket` | Envoie des messages WebSocket custom |
-| `sound_preset` | Sampler WAV par pad |
-| `music` | Player musical avec volume + device audio |
+| `http` | Envoie des requêtes HTTP GET/POST/PUT/PATCH/DELETE par pad |
+| `sound_preset` | Sampler WAV/MP3/OGG par pad |
+| `music` | Sampler musical avec volume global et choix de sortie audio |
 | `lightfx` | Contrôle RGB via OpenRGB |
 | `visualizer` | Visualiseur MIDI temps réel |
 | `debug` | Affiche les messages MIDI bruts |
 
 ---
 
-## 🛠 Build local (développeurs)
+## Configuration
+
+- `config.example.json` : template versionné, utile pour comprendre la structure.
+- `config.json` : vraie config locale, générée automatiquement, ignorée par git.
+- `modules/config_defaults.py` : valeurs par défaut utilisées par le bootstrap.
+
+Extrait minimal :
+
+```json
+{
+  "device_name": "MPK mini 3 0",
+  "theme": "dark",
+  "window_w": 520,
+  "window_h": 820,
+  "programs": {
+    "1": { "name": "Gamepad", "mode": "gamepad" },
+    "4": { "name": "Debug", "mode": "debug" }
+  }
+}
+```
+
+Si ton MPK apparaît sous un autre nom Windows, ouvre HexPad puis utilise le bouton `↺` dans la ligne device, ou modifie `device_name` dans `config.json`.
+
+---
+
+## Build local développeur
 
 ```bat
-:: Windows
 build_exe.bat
 ```
 
 Ou manuellement :
+
 ```bat
 pip install -r requirements.txt
 python assets/make_icon.py
 pyinstaller hexpad.spec --noconfirm --clean
 ```
 
-Le binaire est dans `dist/HexPad.exe`.
+Le binaire est généré dans `dist/HexPad.exe`.
 
 ---
 
-## Configuration
-
-Edite `config.json` directement ou utilise le **Mapping Editor** intégré (mode NORMAL ou WIDE).
-
-```json
-{
-  "device_name": "MPK mini 3 0",
-  "theme": "dark",
-  "window_mode": "NORMAL",
-  "programs": { ... }
-}
-```
-
----
-
-## Lancer sans exe (Python)
-
-```bat
-pip install -r requirements.txt
-python gui.py
-```
-
----
-
-## Dépendances
+## Dépendances principales
 
 - `mido` + `python-rtmidi` — MIDI
 - `pyvjoy` — gamepad virtuel
 - `pynput` — clavier/souris
 - `obsws-python` — OBS WebSocket 5
-- `pygame` + `sounddevice` — audio
-- `openrgb-python` — RGB
-- `Pillow` — génération icône
-- `pyinstaller` — build exe
+- `pygame` + `sounddevice` — modes sampler/music
+- `openrgb-python` — contrôle RGB
+- `pyinstaller` — build `.exe`
+
+---
+
+## Dépannage rapide
+
+**La GUI ne se lance pas ou se ferme direct**
+
+```bat
+python gui.py 2>&1 | more
+```
+
+**Config JSON cassée après conflit git**
+
+```bat
+python bootstrap_config.py
+```
+
+Le fichier cassé sera sauvegardé en `config.backup-YYYYMMDD-HHMMSS.json`, puis une config propre sera recréée.
+
+**vJoy non activé**
+
+Le mode `gamepad` nécessite vJoy installé et activé. Les autres modes peuvent fonctionner sans vJoy.
+
+**OBS ne répond pas**
+
+Ouvre OBS → Outils → obs-websocket → active le serveur WebSocket, port `4455`.
