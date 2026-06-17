@@ -2,9 +2,13 @@
 """
 HexPad local configuration bootstrap.
 
-`config.json` is intentionally ignored by git because it contains machine-specific
+config.json is intentionally ignored by git because it contains machine-specific
 MIDI/audio/OBS settings. This module provides a safe default config and can create
 or repair the local config on first launch.
+
+Important Windows note: config.json is always written with ensure_ascii=True so
+it stays pure ASCII. That avoids cp1252/charmap crashes in older code paths that
+open the file without an explicit UTF-8 encoding.
 """
 from __future__ import annotations
 
@@ -177,20 +181,25 @@ def _backup_path(config_path: Path) -> Path:
     return config_path.with_name(f"config.backup-{stamp}.json")
 
 
-def write_default_config(path: Path) -> None:
+def _write_json(path: Path, data: dict[str, Any]) -> None:
     path.write_text(
-        json.dumps(DEFAULT_CONFIG, indent=2, ensure_ascii=False) + "\n",
+        json.dumps(data, indent=2, ensure_ascii=True) + "\n",
         encoding="utf-8",
     )
 
 
+def write_default_config(path: Path) -> None:
+    _write_json(path, DEFAULT_CONFIG)
+
+
 def ensure_local_config(root: str | Path | None = None, *, silent: bool = False) -> Path:
     """
-    Ensure a valid local `config.json` exists.
+    Ensure a valid local config.json exists.
 
     - If missing: create it from DEFAULT_CONFIG.
     - If invalid JSON: back it up and recreate a clean config.
     - If valid but old: fill only missing default keys; preserve user changes.
+    - Always rewrite as ASCII-safe JSON to avoid Windows charmap errors.
     """
     root_path = Path(root or Path.cwd())
     config_path = root_path / "config.json"
@@ -207,6 +216,17 @@ def ensure_local_config(root: str | Path | None = None, *, silent: bool = False)
 
     try:
         current = json.loads(config_path.read_text(encoding="utf-8"))
+    except UnicodeDecodeError:
+        try:
+            current = json.loads(config_path.read_text(encoding="cp1252"))
+        except Exception as exc:
+            backup = _backup_path(config_path)
+            shutil.move(str(config_path), str(backup))
+            write_default_config(config_path)
+            if not silent:
+                print(f"[CONFIG] Invalid config backed up to {backup.name}: {exc}")
+                print(f"[CONFIG] Created fresh {config_path.name}")
+            return config_path
     except Exception as exc:
         backup = _backup_path(config_path)
         shutil.move(str(config_path), str(backup))
@@ -217,13 +237,12 @@ def ensure_local_config(root: str | Path | None = None, *, silent: bool = False)
         return config_path
 
     merged, changed = _deep_fill_missing(current, DEFAULT_CONFIG)
-    if changed:
-        config_path.write_text(
-            json.dumps(merged, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
-        if not silent:
+    # Always rewrite: this normalizes valid UTF-8 configs to ASCII-safe JSON.
+    _write_json(config_path, merged)
+    if not silent:
+        if changed:
             print(f"[CONFIG] Updated {config_path.name} with missing default keys")
+        print(f"[CONFIG] Normalized {config_path.name} as ASCII-safe JSON")
 
     return config_path
 
