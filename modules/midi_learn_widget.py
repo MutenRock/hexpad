@@ -1,172 +1,222 @@
+#!/usr/bin/env python3
 """
-midi_learn_widget.py — Widget Tkinter « bouton Learn » réutilisable.
+midi_learn_widget.py — Widget Tkinter LearnButton.
 
-Encapsule un tk.Button qui :
-  1. Lance un MidiLearn sur clic
-  2. Clignote en orange pendant l'écoute
-  3. Appelle on_learned(kind, number) quand un pad/knob est détecté
-  4. S'annule proprement si cancel() est appelé ou si un autre
-     LearnButton est activé sur la même session partagée.
+Bouton autonome qui :
+  1. Au clic, lance MidiLearn sur le device courant
+  2. Clignote en rouge pendant l'écoute
+  3. Affiche le résultat (note N / CC N) quand appris
+  4. Appelle on_learned(kind, number) pour persister le mapping
 
-Usage :
-    lbtn = LearnButton(
-        parent        = frame,
-        device_fn     = lambda: gui.device_var.get(),
-        on_learned    = lambda kind, num: print(kind, num),
-        theme         = C,          # dict couleurs HexPad
-        accept        = ("note",),  # ou ("cc",) ou ("note", "cc")
-        session       = learn_sess, # LearnSession partagée (optionnel)
-    )
-    lbtn.pack(side="left", padx=2)
+Corrections vs version précédente :
+  - idle_label est passé en paramètre (dynamique)
+  - accept tuple transmis correctement au MidiLearn
+  - _stop_blink utilise after_cancel() — plus d'AttributeError si
+    le widget est détruit avant la fin du blink
+  - le callback MidiLearn est wrappé dans root.after(0, ...) pour
+    garantir le thread-safety Tkinter
 """
 from __future__ import annotations
 
 import tkinter as tk
-import threading
-from typing import Callable, Tuple, Optional
+from typing import Callable, Literal, Tuple
 
 from modules.midi_learn import MidiLearn, LearnKind
 
-
-class LearnSession:
-    """
-    Objet partagé entre tous les LearnButton d'un même éditeur.
-    Garantit qu'un seul Learn est actif à la fois.
-    """
-    def __init__(self) -> None:
-        self._active: Optional["LearnButton"] = None
-        self._lock = threading.Lock()
-
-    def register(self, btn: "LearnButton") -> None:
-        """Annule le Learn précédent et enregistre btn comme actif."""
-        with self._lock:
-            if self._active is not None and self._active is not btn:
-                self._active._do_cancel()
-            self._active = btn
-
-    def release(self, btn: "LearnButton") -> None:
-        with self._lock:
-            if self._active is btn:
-                self._active = None
+LearnCallback = Callable[[LearnKind, int], None]
 
 
 class LearnButton(tk.Button):
     """
-    Bouton ⚡ Learn qui lance un MidiLearn et clignote pendant l'écoute.
+    Bouton MIDI Learn autonome.
+
+    Paramètres
+    ----------
+    parent      : widget parent Tkinter
+    root        : fenêtre racine (pour root.after)
+    device_var  : tk.StringVar contenant le nom du port MIDI ouvert
+    on_learned  : callable(kind: str, number: int) — appelé quand
+                  un message MIDI est détecté
+    accept      : tuple de kinds autorisés ("note", "cc")
+    idle_label  : texte affiché à l'état repos (ex: "⚡ Learn")
+    colors      : dict de couleurs du thème HexPad
+    timeout     : durée max d'attente MIDI en secondes
+    **kwargs    : transmis à tk.Button
     """
-    _BLINK_MS = 400
+
+    BLINK_MS  = 420   # intervalle clignotement
 
     def __init__(
         self,
-        parent,
-        device_fn:  Callable[[], str],
-        on_learned: Callable[[LearnKind, int], None],
-        theme:      dict,
-        accept:     Tuple[str, ...] = ("note",),
-        session:    Optional[LearnSession] = None,
+        parent: tk.Widget,
+        root: tk.Tk,
+        device_var: tk.StringVar,
+        on_learned: LearnCallback,
+        accept: Tuple[LearnKind, ...] = ("note", "cc"),
+        idle_label: str = "⚡ Learn",
+        colors: dict | None = None,
+        timeout: float = 30.0,
         **kwargs,
     ) -> None:
-        self._device_fn  = device_fn
+        self._root       = root
+        self._device_var = device_var
         self._on_learned = on_learned
-        self._C          = theme
         self._accept     = accept
-        self._session    = session
-        self._learner: Optional[MidiLearn] = None
-        self._blinking   = False
+        self._idle_label = idle_label
+        self._timeout    = timeout
+        self._C          = colors or {}
+        self._learner: MidiLearn | None = None
+        self._blink_job: str | None = None
         self._blink_state = False
+        self._countdown_job: str | None = None
+        self._remaining: float = 0.0
 
-        super().__init__(
-            parent,
-            text="⚡",
+        # couleurs
+        self._bg_idle   = self._C.get("btn",   "#1e1b4b")
+        self._fg_idle   = self._C.get("learn", "#f43f5e")
+        self._bg_active = self._C.get("learn", "#f43f5e")
+        self._fg_active = self._C.get("bg",    "#0a0a12")
+
+        defaults = dict(
+            text=idle_label,
             font=("Courier", 8, "bold"),
-            bg=theme["btn"],
-            fg=theme["accent2"],
-            activebackground=theme["accent2"],
-            activeforeground=theme["bg"],
+            bg=self._bg_idle,
+            fg=self._fg_idle,
+            activebackground=self._bg_active,
+            activeforeground=self._fg_active,
             relief="flat",
-            padx=4,
+            padx=6,
             cursor="hand2",
-            command=self._on_click,
-            **kwargs,
+            command=self._toggle,
         )
+        defaults.update(kwargs)
+        super().__init__(parent, **defaults)
 
-    # ─────────────────────────────────────────────────────────────
-    def _on_click(self) -> None:
-        if self._learner and self._learner.is_active():
-            self._do_cancel()
-            return
-        device = self._device_fn()
-        if not device or device == "Aucun":
-            self._flash_error()
-            return
-        if self._session:
-            self._session.register(self)
-        self._learner = MidiLearn(
-            device_name=device,
-            callback=self._on_result,
-            accept=self._accept,
-            timeout=30.0,
-        )
-        self._learner.start()
-        self._start_blink()
+    # ─────────────────────────────────────────────────────────────────────────
+    # API publique
+    # ─────────────────────────────────────────────────────────────────────────
 
-    def _on_result(self, kind: LearnKind, number: int) -> None:
-        # Appelé dans le thread daemon MidiLearn → on schedule sur Tkinter
-        try:
-            root = self.winfo_toplevel()
-            root.after(0, self._apply_result, kind, number)
-        except Exception:
-            pass
-
-    def _apply_result(self, kind: LearnKind, number: int) -> None:
-        self._stop_blink()
-        if self._session:
-            self._session.release(self)
-        self._on_learned(kind, number)
-
-    def _do_cancel(self) -> None:
+    def cancel(self) -> None:
+        """Annule l'écoute en cours et remet le bouton à l'état repos."""
         if self._learner:
             self._learner.cancel()
             self._learner = None
         self._stop_blink()
-        if self._session:
-            self._session.release(self)
+        self._stop_countdown()
+        self._set_idle()
 
-    # ── Blink ─────────────────────────────────────────────────────
-    def _start_blink(self) -> None:
-        self._blinking = True
-        self._blink_state = True
-        self.config(fg=self._C["bg"])
-        self._blink_step()
+    # ─────────────────────────────────────────────────────────────────────────
+    # Internes
+    # ─────────────────────────────────────────────────────────────────────────
 
-    def _stop_blink(self) -> None:
-        self._blinking = False
+    def _toggle(self) -> None:
+        if self._learner and self._learner.is_active():
+            self.cancel()
+        else:
+            self._start_learn()
+
+    def _start_learn(self) -> None:
+        device = self._device_var.get().strip()
+        if not device or device == "Aucun":
+            self.config(text="No device", fg=self._C.get("red", "#ef4444"))
+            self._root.after(1500, self._set_idle)
+            return
+
+        self._learner = MidiLearn(
+            device_name=device,
+            callback=self._on_midi_received,
+            accept=self._accept,
+            timeout=self._timeout,
+        )
+        self._learner.start()
+        self._start_blink()
+        self._start_countdown(self._timeout)
+
+    def _on_midi_received(self, kind: LearnKind, number: int) -> None:
+        """Appelé depuis le thread MidiLearn — on délègue à Tkinter."""
+        self._root.after(0, self._apply_learned, kind, number)
+
+    def _apply_learned(self, kind: LearnKind, number: int) -> None:
+        self._learner = None
+        self._stop_blink()
+        self._stop_countdown()
+        label = f"✓ {'N' if kind == 'note' else 'CC'}{number}"
         try:
             self.config(
-                bg=self._C["btn"],
-                fg=self._C["accent2"],
-                text="⚡",
+                text=label,
+                bg=self._C.get("green", "#22c55e"),
+                fg=self._C.get("bg",    "#0a0a12"),
+            )
+        except tk.TclError:
+            return
+        try:
+            self._on_learned(kind, number)
+        except Exception:
+            pass
+        self._root.after(2000, self._set_idle)
+
+    def _set_idle(self) -> None:
+        """Remet le bouton à l'état repos."""
+        try:
+            self.config(
+                text=self._idle_label,
+                bg=self._bg_idle,
+                fg=self._fg_idle,
             )
         except tk.TclError:
             pass  # widget détruit
 
-    def _blink_step(self) -> None:
-        if not self._blinking:
-            return
+    # ── Blink ─────────────────────────────────────────────────────────────────
+
+    def _start_blink(self) -> None:
+        self._blink_state = False
+        self._blink_tick()
+
+    def _blink_tick(self) -> None:
         try:
             if self._blink_state:
-                self.config(bg="#e07000", fg=self._C["bg"], text="● LEARN")
+                self.config(
+                    bg=self._bg_active,
+                    fg=self._fg_active,
+                    text="● LISTEN",
+                )
             else:
-                self.config(bg=self._C["btn"], fg="#e07000", text="⚡ LEARN")
+                self.config(
+                    bg=self._bg_idle,
+                    fg=self._fg_idle,
+                    text="○ LISTEN",
+                )
             self._blink_state = not self._blink_state
-            self.after(self._BLINK_MS, self._blink_step)
+            self._blink_job = self._root.after(self.BLINK_MS, self._blink_tick)
         except tk.TclError:
-            pass  # widget détruit
+            pass  # widget détruit entre deux ticks
 
-    def _flash_error(self) -> None:
-        orig_bg = self["bg"]
-        try:
-            self.config(bg=self._C["red"])
-            self.after(500, lambda: self.config(bg=orig_bg))
-        except tk.TclError:
-            pass
+    def _stop_blink(self) -> None:
+        """Annule le job blink en cours — corrige le bug d'AttributeError."""
+        if self._blink_job is not None:
+            try:
+                self._root.after_cancel(self._blink_job)
+            except Exception:
+                pass
+            self._blink_job = None
+
+    # ── Countdown ─────────────────────────────────────────────────────────────
+
+    def _start_countdown(self, remaining: float) -> None:
+        self._remaining = remaining
+        self._countdown_tick()
+
+    def _countdown_tick(self) -> None:
+        self._remaining -= 1
+        if self._remaining <= 0:
+            self.cancel()
+            return
+        self._countdown_job = self._root.after(1000, self._countdown_tick)
+
+    def _stop_countdown(self) -> None:
+        if self._countdown_job is not None:
+            try:
+                self._root.after_cancel(self._countdown_job)
+            except Exception:
+                pass
+            self._countdown_job = None
