@@ -1,31 +1,26 @@
+#!/usr/bin/env python3
 """
-hotkey_manager.py — Hotkeys globaux HexPad via pynput.
+HotKeyManager v2.0
+  Raccourcis clavier globaux (hors focus fenêtre) via pynput.
+  Actions disponibles :
+    start_stop      – démarre ou arrête le listener MIDI
+    profile_next    – profil suivant dans la liste
+    profile_prev    – profil précédent dans la liste
+    profile_1..8    – sélection directe d'un profil par index
 
-Dépendance optionnelle : pynput
-    pip install pynput
-
-Si pynput n'est pas disponible, HotKeyManager se crée sans erreur
-mais ne fait rien (fallback silencieux).
-
-Configuration dans config.json :
-
+  Configuration dans config.json :
     "hotkeys": {
-        "start_stop"     : "<ctrl>+<alt>+h",
-        "next_profile"   : "<ctrl>+<alt>+n",
-        "prev_profile"   : "<ctrl>+<alt>+b",
-        "mute_console"   : "<ctrl>+<alt>+m"
+      "<ctrl>+<shift>+s": "start_stop",
+      "<ctrl>+<shift>+right": "profile_next",
+      "<ctrl>+<shift>+left":  "profile_prev",
+      "<ctrl>+<shift>+1":     "profile_1"
     }
 
-Toutes les clés sont optionnelles. Les valeurs suivent la syntaxe
-pynput HotKey : touches spéciales entre <>, combinaisons avec +.
-Exemples valides :
-    "<ctrl>+<shift>+h"
-    "<f9>"
-    "<ctrl>+<alt>+p"
+  Dépendance : pip install pynput
 """
 from __future__ import annotations
-
-from typing import Callable, Dict
+import threading
+from typing import Callable, Dict, Optional
 
 try:
     from pynput import keyboard as _kb
@@ -33,97 +28,113 @@ try:
 except ImportError:
     PYNPUT_OK = False
 
-_DEFAULT_HOTKEYS: Dict[str, str] = {
-    "start_stop"   : "<ctrl>+<alt>+h",
-    "next_profile" : "<ctrl>+<alt>+n",
-    "prev_profile" : "<ctrl>+<alt>+b",
-    "mute_console" : "<ctrl>+<alt>+m",
+
+DEFAULT_HOTKEYS: Dict[str, str] = {
+    "<ctrl>+<shift>+s":     "start_stop",
+    "<ctrl>+<shift>+right": "profile_next",
+    "<ctrl>+<shift>+left":  "profile_prev",
+    "<ctrl>+<shift>+1":     "profile_1",
+    "<ctrl>+<shift>+2":     "profile_2",
+    "<ctrl>+<shift>+3":     "profile_3",
+    "<ctrl>+<shift>+4":     "profile_4",
 }
 
 
 class HotKeyManager:
     """
-    Gère les raccourcis clavier globaux HexPad.
+    Gère les raccourcis clavier globaux et les dispatche vers des callbacks.
 
-    Paramètres
-    ----------
-    config      : dict issu de config.json (clé optionnelle ``hotkeys``)
-    callbacks   : dict action → callable, ex. {"start_stop": self._toggle}
-
-    Méthodes publiques
-    ------------------
-    start()     : démarre le listener (thread daemon)
-    stop()      : arrête le listener proprement
-    is_active() : True si le listener tourne
+    Usage :
+        hkm = HotKeyManager(config, log_fn=self._log)
+        hkm.register("start_stop",   self._start_or_stop)
+        hkm.register("profile_next", self._profile_next)
+        hkm.register("profile_prev", self._profile_prev)
+        for i in range(1, 9):
+            hkm.register(f"profile_{i}", lambda i=i: self._select_profile_by_index(i))
+        hkm.start()
+        # ... later ...
+        hkm.stop()
     """
 
-    def __init__(self, config: dict, callbacks: Dict[str, Callable]) -> None:
-        self._config    = config.get("hotkeys", {})
-        self._callbacks = callbacks
-        self._listener  = None
-        self._hotkeys   = {}   # combinaison → HotKey pynput
+    def __init__(self, config: dict, log_fn: Optional[Callable] = None):
+        self._config   = config
+        self._log      = log_fn or (lambda msg: None)
+        self._actions: Dict[str, Callable] = {}
+        self._listener: Optional[object]   = None
+        self._lock     = threading.Lock()
+        self.enabled   = PYNPUT_OK
 
-    # ──────────────────────────────────────────────────────────────
+    # ── Registration ──────────────────────────────────────────────────────────
+    def register(self, action: str, callback: Callable) -> None:
+        """Enregistre un callback pour une action nommée."""
+        self._actions[action] = callback
+
+    # ── Build hotkey map from config ──────────────────────────────────────────
+    def _build_hotkey_map(self) -> Dict[str, Callable]:
+        raw = self._config.get("hotkeys", DEFAULT_HOTKEYS)
+        mapping: Dict[str, Callable] = {}
+        for combo, action in raw.items():
+            cb = self._actions.get(action)
+            if cb is None:
+                self._log(f"[HOTKEY] action inconnue : '{action}' (combo ignoré: {combo})")
+                continue
+            mapping[combo] = cb
+        return mapping
+
+    # ── Start / Stop ──────────────────────────────────────────────────────────
     def start(self) -> None:
+        """Démarre l'écoute des hotkeys globaux dans un thread daemon."""
         if not PYNPUT_OK:
+            self._log("[HOTKEY] ⚠ pynput non installé — pip install pynput")
             return
-        self.stop()
-        hotkey_map: Dict[str, Callable] = {}
-        for action, default_combo in _DEFAULT_HOTKEYS.items():
-            combo = self._config.get(action, default_combo)
-            cb    = self._callbacks.get(action)
-            if cb is not None:
-                hotkey_map[combo] = cb
-        if not hotkey_map:
-            return
-        # Construire les HotKey pynput
-        def for_canonical(listener):
-            return lambda k: listener.canonical(k)
-        triggers = {
-            _kb.HotKey.parse(combo): cb
-            for combo, cb in hotkey_map.items()
-        }
-        def on_press(key):
-            for hotkey_keys, cb in triggers.items():
-                # pynput HotKey est un objet à utiliser avec GlobalHotKeys
-                pass
-        # Utiliser GlobalHotKeys (API haut niveau pynput)
-        self._listener = _kb.GlobalHotKeys(
-            {combo: cb for combo, cb in hotkey_map.items()}
-        )
-        self._listener.daemon = True
-        self._listener.start()
+        with self._lock:
+            if self._listener is not None:
+                return
+            hk_map = self._build_hotkey_map()
+            if not hk_map:
+                self._log("[HOTKEY] Aucun hotkey configuré.")
+                return
+            try:
+                self._listener = _kb.GlobalHotKeys(hk_map)
+                self._listener.daemon = True
+                self._listener.start()
+                combos = ", ".join(hk_map.keys())
+                self._log(f"[HOTKEY] Actif — {combos}")
+            except Exception as e:
+                self._log(f"[HOTKEY] Erreur démarrage : {e}")
+                self._listener = None
 
     def stop(self) -> None:
-        if self._listener is not None:
-            try:
-                self._listener.stop()
-            except Exception:
-                pass
-            self._listener = None
+        """Arrête l'écoute des hotkeys."""
+        with self._lock:
+            if self._listener is not None:
+                try:
+                    self._listener.stop()
+                except Exception:
+                    pass
+                self._listener = None
+                self._log("[HOTKEY] Arrêté.")
 
-    def is_active(self) -> bool:
-        return self._listener is not None and self._listener.is_alive()
+    def restart(self) -> None:
+        """Redémarre (utile après modification de config)."""
+        self.stop()
+        self.start()
 
-    def get_combo(self, action: str) -> str:
-        """Retourne la combinaison configurée pour une action."""
-        return self._config.get(action, _DEFAULT_HOTKEYS.get(action, ""))
+    # ── Config helpers ────────────────────────────────────────────────────────
+    def get_hotkeys_config(self) -> Dict[str, str]:
+        """Retourne le mapping combo→action actuellement en config."""
+        return dict(self._config.get("hotkeys", DEFAULT_HOTKEYS))
 
-    def update_combo(self, action: str, combo: str) -> None:
-        """
-        Met à jour la combinaison d'une action à chaud.
-        Redémarre le listener si il était actif.
-        """
-        was_active = self.is_active()
-        self._config[action] = combo
-        if was_active:
-            self.start()
+    def set_hotkeys_config(self, mapping: Dict[str, str]) -> None:
+        """Met à jour le mapping en mémoire (pas de save disque ici)."""
+        self._config["hotkeys"] = mapping
 
     @staticmethod
-    def available() -> bool:
-        """True si pynput est installé."""
+    def available_actions() -> list:
+        actions = ["start_stop", "profile_next", "profile_prev"]
+        actions += [f"profile_{i}" for i in range(1, 9)]
+        return actions
+
+    @staticmethod
+    def is_available() -> bool:
         return PYNPUT_OK
-
-    @staticmethod
-    def default_combos() -> Dict[str, str]:
-        return dict(_DEFAULT_HOTKEYS)

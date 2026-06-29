@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 """
-HexPad GUI v2.3.0
+HexPad GUI v2.4.0
   - Fenêtre unique redimensionnable
   - Mapping Editor en Toplevel dédié (bouton ⚙ dans le header)
   - Console rétractable (toggle ▾/▴)
   - Panneau TEST intégré (notebook) : MIDI monitor, HTTP, WebSocket, Bridges, OLED
   - Mode/taille de fenêtre sauvegardés silencieusement
+  - [NEW] MIDI Learn dans le Mapping Editor (appuie physiquement sur un pad)
+  - [NEW] Hotkeys globaux configurables (Ctrl+Shift+S, +◀▶, +1-4)
+  - [NEW] Bouton [🖥 OLED] dans le header → fenêtre rapide OLED sans passer par TEST
+  - [NEW] Flèches ◀ ▶ dans la device row pour switcher de profil instantanément
 """
 import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox, filedialog
@@ -22,6 +26,7 @@ from modules.themes           import DARK, LIGHT, MODE_COLORS, get as get_theme
 from modules.http_bridge      import HttpBridge
 from modules.sound_preset_bridge import SoundPresetBridge
 from modules.display_panel    import OLEDPanel
+from modules.hotkey_manager   import HotKeyManager
 
 try:
     from modules.music_bridge import MusicBridge
@@ -29,9 +34,9 @@ try:
 except ImportError:
     MUSIC_OK = False
 
-VERSION = "2.3.0"
+VERSION = "2.4.0"
 
-DEFAULT_W, DEFAULT_H = 520, 820
+DEFAULT_W, DEFAULT_H = 520, 840
 MIN_W,     MIN_H     = 460, 600
 
 PAD_BANK_A  = [36,37,38,39,40,41,42,43]
@@ -64,16 +69,23 @@ class HexPadGUI:
         self._orig_print   = builtins.print
         self.running       = False
         self.listener      = None
-        self._learn_target = None
+        self._learn_target = None  # (pad_key, btn_widget) quand MIDI Learn actif
+        self._learn_type   = None  # "note" ou "cc"
         self._pad_btns     = {}
         self._current_prog = "1"
         self._editor_win   = None
+        self._oled_win     = None
+        self._hotkey_win   = None
         self._console_visible = True
         self.config        = self._load_config()
         self.profiles      = GameProfiles()
         self.combo_engine  = ComboEngine()
         theme_name = self.config.get("theme", "dark")
         self.C = get_theme(theme_name)
+        # Hotkey manager
+        self.hotkey_mgr = HotKeyManager(self.config, log_fn=self._log)
+        self._register_hotkeys()
+        self.hotkey_mgr.start()
         self._apply_window()
         self._build_ui()
         if self.config.get("programs"):
@@ -81,6 +93,42 @@ class HexPadGUI:
         self._sync_profile()
         self._mon_stop = threading.Event()
         self._start_monitor()
+
+    # ── Hotkeys ───────────────────────────────────────────────────────────────
+    def _register_hotkeys(self):
+        self.hotkey_mgr.register("start_stop",   self._hotkey_start_stop)
+        self.hotkey_mgr.register("profile_next", self._hotkey_profile_next)
+        self.hotkey_mgr.register("profile_prev", self._hotkey_profile_prev)
+        for i in range(1, 9):
+            self.hotkey_mgr.register(f"profile_{i}", lambda idx=i: self._hotkey_profile_index(idx))
+
+    def _hotkey_start_stop(self):
+        self.root.after(0, lambda: self._stop() if self.running else self._start())
+
+    def _hotkey_profile_next(self):
+        self.root.after(0, self._profile_step, +1)
+
+    def _hotkey_profile_prev(self):
+        self.root.after(0, self._profile_step, -1)
+
+    def _hotkey_profile_index(self, idx: int):
+        self.root.after(0, self._profile_by_index, idx - 1)
+
+    def _profile_step(self, delta: int):
+        names = self.profiles.names
+        if not names: return
+        cur = self.profile_var.get()
+        try: i = names.index(cur)
+        except ValueError: i = 0
+        new_i = (i + delta) % len(names)
+        self.profile_var.set(names[new_i])
+        self._on_profile_changed()
+
+    def _profile_by_index(self, idx: int):
+        names = self.profiles.names
+        if 0 <= idx < len(names):
+            self.profile_var.set(names[idx])
+            self._on_profile_changed()
 
     # ── Window ────────────────────────────────────────────────────────────────
     def _apply_window(self):
@@ -136,6 +184,7 @@ class HexPadGUI:
     def on_close(self):
         self._save_config()
         self._mon_stop.set()
+        self.hotkey_mgr.stop()
         if self.listener: self.listener.stop()
         self.root.destroy()
 
@@ -146,7 +195,6 @@ class HexPadGUI:
         self._build_header(self.root)
         self._build_device_row(self.root)
         self._sep(self.root)
-        # Notebook : RUN / TEST
         self._nb = ttk.Notebook(self.root, style="H.TNotebook")
         self._nb.pack(fill="both", expand=True, padx=0, pady=0)
         self._tab_run  = tk.Frame(self._nb, bg=self.C["bg"])
@@ -178,6 +226,7 @@ class HexPadGUI:
             fg=C["text"], bg=C["panel"]).pack(side="left")
         tk.Label(hdr, text=f" v{VERSION}", font=("Courier", 7),
             fg=C["dim"], bg=C["panel"]).pack(side="left")
+        # Boutons droite
         tk.Button(hdr, text="✕", font=("Courier", 10, "bold"),
             bg=C["panel"], fg=C["dim"], relief="flat", padx=8,
             cursor="hand2", command=self.on_close).pack(side="right", padx=2)
@@ -189,7 +238,16 @@ class HexPadGUI:
             cursor="hand2", command=self._toggle_theme).pack(side="right", padx=2)
         tk.Button(hdr, text="⚙ Mapping", font=("Courier", 8, "bold"),
             bg=C["accent2"], fg=C["bg"], relief="flat", padx=10, pady=2,
-            cursor="hand2", command=self._open_editor).pack(side="right", padx=6)
+            cursor="hand2", command=self._open_editor).pack(side="right", padx=4)
+        # [NEW] Bouton OLED rapide
+        tk.Button(hdr, text="🖥 OLED", font=("Courier", 8, "bold"),
+            bg=C["panel2"], fg=C["accent"], relief="flat", padx=8, pady=2,
+            cursor="hand2", command=self._open_oled_window).pack(side="right", padx=4)
+        # [NEW] Bouton Hotkeys
+        hk_color = C["green"] if HotKeyManager.is_available() else C["dim"]
+        tk.Button(hdr, text="⌨ Keys", font=("Courier", 8, "bold"),
+            bg=C["panel2"], fg=hk_color, relief="flat", padx=8, pady=2,
+            cursor="hand2", command=self._open_hotkey_window).pack(side="right", padx=4)
 
     # ── Device row ────────────────────────────────────────────────────────────
     def _build_device_row(self, parent):
@@ -212,11 +270,18 @@ class HexPadGUI:
             cursor="hand2", command=self._refresh_devices).pack(side="left", padx=2)
         tk.Label(dp, text="|", fg=C["border"], bg=C["bg"],
             font=("Courier", 10)).pack(side="left", padx=4)
+        # [NEW] flèches profil rapide ◀ ▶
+        tk.Button(dp, text="◀", font=("Courier", 9, "bold"),
+            bg=C["bg"], fg=C["dim"], relief="flat", padx=3,
+            cursor="hand2", command=lambda: self._profile_step(-1)).pack(side="left")
         self.profile_var = tk.StringVar(value=self.profiles.active)
         self.profile_cb = ttk.Combobox(dp, textvariable=self.profile_var,
             values=self.profiles.names, width=12, state="readonly", style="H.TCombobox")
         self.profile_cb.pack(side="left", padx=2)
         self.profile_cb.bind("<<ComboboxSelected>>", self._on_profile_changed)
+        tk.Button(dp, text="▶", font=("Courier", 9, "bold"),
+            bg=C["bg"], fg=C["dim"], relief="flat", padx=3,
+            cursor="hand2", command=lambda: self._profile_step(+1)).pack(side="left")
 
     def _refresh_devices(self):
         devices = mido.get_input_names() or ["Aucun"]
@@ -346,6 +411,11 @@ class HexPadGUI:
         C = self.C
         ctrl = tk.Frame(parent, bg=C["bg"])
         ctrl.pack(fill="x", padx=10, pady=4)
+        # label hotkey hint
+        hk_cfg = self.config.get("hotkeys", {})
+        ss_combo = next((k for k, v in hk_cfg.items() if v == "start_stop"), "Ctrl+Shift+S")
+        tk.Label(ctrl, text=f"hotkey : {ss_combo}",
+            font=("Courier", 7), fg=C["dim"], bg=C["bg"]).pack(anchor="e")
         self.start_btn = tk.Button(ctrl,
             text="▶▶  START", font=("Courier", 12, "bold"),
             bg=C["green"], fg=C["bg"], relief="flat", pady=12,
@@ -436,8 +506,9 @@ class HexPadGUI:
         )
         self.console.pack(fill="both", expand=True)
         self.console.config(state="disabled")
+        hk_status = "✓ pynput" if HotKeyManager.is_available() else "⚠ pip install pynput"
         music_status = "" if MUSIC_OK else "  ⚠ pip install pygame sounddevice"
-        self._log(f"⬡ HexPad v{VERSION} ready  theme:{self.C['name']}{music_status}")
+        self._log(f"⬡ HexPad v{VERSION} ready  theme:{self.C['name']}  {hk_status}{music_status}")
 
     def _toggle_console(self):
         self._console_visible = not self._console_visible
@@ -475,13 +546,17 @@ class HexPadGUI:
                                     hc = self.C["accent"]
                                     self.root.after(0, b.config, {"bg": hc, "fg": self.C["bg"]})
                                     self.root.after(200, b.config, {"bg": self.C["pad_off"], "fg": self.C["dim"]})
-                                if self._learn_target:
-                                    self.root.after(0, self._on_learn_received, msg.note)
+                                # MIDI Learn : note
+                                if self._learn_target and self._learn_type == "note":
+                                    self.root.after(0, self._on_learn_received, "note", msg.note)
                                 # Feed test MIDI log if active
                                 if hasattr(self, "_test_midi_log"):
                                     label = f"note_on  note={msg.note} ({note_name(msg.note)})  vel={msg.velocity}"
                                     self.root.after(0, self._test_append, label)
                             elif msg and msg.type == "control_change":
+                                # MIDI Learn : CC
+                                if self._learn_target and self._learn_type == "cc":
+                                    self.root.after(0, self._on_learn_received, "cc", msg.control)
                                 if hasattr(self, "_test_midi_log"):
                                     label = f"cc       cc={msg.control}  val={msg.value}"
                                     self.root.after(0, self._test_append, label)
@@ -489,13 +564,451 @@ class HexPadGUI:
                 except Exception: time.sleep(1)
         threading.Thread(target=run, daemon=True).start()
 
-    def _on_learn_received(self, note):
+    def _on_learn_received(self, msg_type: str, value: int):
+        """Appelé depuis le monitor quand un message MIDI arrive pendant le Learn."""
         if not self._learn_target: return
-        pad_key, btn = self._learn_target
-        self._log(f"[LEARN] Note {note} ({note_name(note)}) → pad {pad_key}")
-        btn.config(bg=self.C["panel2"], fg=self.C["dim"])
+        target_info, btn, callback = self._learn_target
         self._learn_target = None
-        if hasattr(self, "_me_pad_frame"): self._me_build_pad_grid()
+        self._learn_type   = None
+        name = note_name(value) if msg_type == "note" else f"CC{value}"
+        self._log(f"[LEARN] {msg_type.upper()} {value} ({name}) → {target_info}")
+        btn.config(bg=self.C["panel2"], fg=self.C["dim"], text="🎹 Learn")
+        if callback:
+            callback(msg_type, value)
+
+    def _start_learn(self, target_info: str, btn_widget, msg_type: str, callback):
+        """Active le mode MIDI Learn pour un champ."""
+        # Annule un learn précédent
+        if self._learn_target:
+            _, old_btn, _ = self._learn_target
+            old_btn.config(bg=self.C["panel2"], fg=self.C["dim"], text="🎹 Learn")
+        self._learn_target = (target_info, btn_widget, callback)
+        self._learn_type   = msg_type
+        btn_widget.config(bg=self.C["accent"], fg=self.C["bg"], text="⏳ Attend...")
+        self._log(f"[LEARN] En attente de {msg_type.upper()} pour '{target_info}'...")
+
+    # ── Fenêtre OLED rapide ───────────────────────────────────────────────────
+    def _open_oled_window(self):
+        """Ouvre un Toplevel dédié au panneau OLED (accessible sans passer par TEST)."""
+        if self._oled_win and self._oled_win.winfo_exists():
+            self._oled_win.lift()
+            return
+        C = self.C
+        win = tk.Toplevel(self.root)
+        win.title("HexPad — OLED Display")
+        win.configure(bg=C["bg"])
+        win.resizable(True, True)
+        win.geometry("540x480")
+        win.transient(self.root)
+        tk.Label(win, text="🖥 AKAI OLED", font=("Courier", 10, "bold"),
+            fg=C["accent"], bg=C["bg"]).pack(anchor="w", padx=12, pady=(10, 2))
+        tk.Frame(win, bg=C["border"], height=1).pack(fill="x", padx=12, pady=2)
+        panel = OLEDPanel(win, self)
+        panel.pack(fill="both", expand=True, padx=8, pady=8)
+        self._oled_win = win
+
+    # ── Fenêtre Hotkeys config ────────────────────────────────────────────────
+    def _open_hotkey_window(self):
+        """Fenêtre de visualisation et configuration des hotkeys globaux."""
+        if self._hotkey_win and self._hotkey_win.winfo_exists():
+            self._hotkey_win.lift()
+            return
+        C = self.C
+        win = tk.Toplevel(self.root)
+        win.title("HexPad — Hotkeys globaux")
+        win.configure(bg=C["bg"])
+        win.resizable(False, False)
+        win.geometry("480x420")
+        win.transient(self.root)
+        self._hotkey_win = win
+
+        tk.Label(win, text="⌨ HOTKEYS GLOBAUX", font=("Courier", 10, "bold"),
+            fg=C["accent"], bg=C["bg"]).pack(anchor="w", padx=12, pady=(10, 2))
+        tk.Frame(win, bg=C["border"], height=1).pack(fill="x", padx=12, pady=2)
+
+        if not HotKeyManager.is_available():
+            tk.Label(win,
+                text="⚠  pynput non installé\npip install pynput",
+                font=("Courier", 9), fg=C["red"], bg=C["bg"],
+                justify="center").pack(pady=20)
+            return
+
+        info = tk.Label(win,
+            text="Les raccourcis fonctionnent même quand la fenêtre n'a pas le focus.",
+            font=("Courier", 7), fg=C["dim"], bg=C["bg"], wraplength=440, justify="left")
+        info.pack(anchor="w", padx=12, pady=(0, 8))
+
+        hk_config = self.hotkey_mgr.get_hotkeys_config()
+        actions   = HotKeyManager.available_actions()
+
+        # Grille combo → action
+        grid_frame = tk.Frame(win, bg=C["bg"])
+        grid_frame.pack(fill="x", padx=12)
+        tk.Label(grid_frame, text="Raccourci clavier", font=("Courier", 8, "bold"),
+            fg=C["accent2"], bg=C["bg"]).grid(row=0, column=0, sticky="w", padx=4, pady=2)
+        tk.Label(grid_frame, text="Action", font=("Courier", 8, "bold"),
+            fg=C["accent2"], bg=C["bg"]).grid(row=0, column=1, sticky="w", padx=4, pady=2)
+
+        self._hk_vars = {}  # combo_str -> StringVar(action)
+        for row_i, (combo, action) in enumerate(hk_config.items(), start=1):
+            tk.Label(grid_frame, text=combo, font=("Courier", 8),
+                fg=C["text"], bg=C["btn"], padx=6, pady=2,
+                relief="flat").grid(row=row_i, column=0, sticky="w", padx=4, pady=2)
+            var = tk.StringVar(value=action)
+            cb  = ttk.Combobox(grid_frame, textvariable=var,
+                values=actions, width=18, state="readonly", style="H.TCombobox")
+            cb.grid(row=row_i, column=1, padx=4, pady=2)
+            self._hk_vars[combo] = var
+
+        tk.Frame(win, bg=C["border"], height=1).pack(fill="x", padx=12, pady=8)
+
+        btn_row = tk.Frame(win, bg=C["bg"])
+        btn_row.pack(fill="x", padx=12, pady=4)
+
+        def _apply():
+            new_cfg = {combo: var.get() for combo, var in self._hk_vars.items()}
+            self.hotkey_mgr.set_hotkeys_config(new_cfg)
+            self.hotkey_mgr.restart()
+            self._save_config()
+            self._log("[HOTKEY] Config mise à jour et rechargée.")
+            win.destroy()
+
+        def _reset():
+            from modules.hotkey_manager import DEFAULT_HOTKEYS
+            self.hotkey_mgr.set_hotkeys_config(dict(DEFAULT_HOTKEYS))
+            self.hotkey_mgr.restart()
+            self._save_config()
+            self._log("[HOTKEY] Config réinitialisée aux valeurs par défaut.")
+            win.destroy()
+            self._open_hotkey_window()
+
+        tk.Button(btn_row, text="✓ Appliquer", font=("Courier", 9, "bold"),
+            bg=C["green"], fg=C["bg"], relief="flat", padx=14, pady=6,
+            cursor="hand2", command=_apply).pack(side="left", padx=4)
+        tk.Button(btn_row, text="↺ Réinitialiser", font=("Courier", 9),
+            bg=C["btn"], fg=C["dim"], relief="flat", padx=10, pady=6,
+            cursor="hand2", command=_reset).pack(side="left", padx=4)
+        tk.Button(btn_row, text="✕ Fermer", font=("Courier", 9),
+            bg=C["btn"], fg=C["dim"], relief="flat", padx=10, pady=6,
+            cursor="hand2", command=win.destroy).pack(side="right", padx=4)
+
+        # Tableau récapitulatif des actions disponibles
+        tk.Frame(win, bg=C["border"], height=1).pack(fill="x", padx=12, pady=4)
+        tk.Label(win, text="Actions disponibles :",
+            font=("Courier", 7, "bold"), fg=C["dim"], bg=C["bg"]).pack(anchor="w", padx=12)
+        desc = "  start_stop · profile_next · profile_prev · profile_1 … profile_8"
+        tk.Label(win, text=desc, font=("Courier", 7), fg=C["dim"],
+            bg=C["bg"], wraplength=440, justify="left").pack(anchor="w", padx=12)
+
+    # ── Mapping Editor (ouverture) ────────────────────────────────────────────
+    def _open_editor(self):
+        if self._editor_win and self._editor_win.winfo_exists():
+            self._editor_win.lift(); return
+        C = self.C
+        win = tk.Toplevel(self.root)
+        win.title("HexPad — Mapping Editor")
+        win.configure(bg=C["bg"])
+        win.resizable(True, True)
+        win.geometry("600x700")
+        win.transient(self.root)
+        self._editor_win = win
+        self._me_loaded  = True
+        self._build_mapping_editor(win)
+
+    def _build_mapping_editor(self, parent):
+        C = self.C
+        # Header
+        hdr = tk.Frame(parent, bg=C["panel"], pady=6)
+        hdr.pack(fill="x")
+        tk.Label(hdr, text="⚙ MAPPING EDITOR", font=("Courier", 10, "bold"),
+            fg=C["accent"], bg=C["panel"]).pack(side="left", padx=12)
+
+        # [NEW] Bouton MIDI Learn global dans l'éditeur
+        self._me_learn_active = False
+        self._me_learn_btn = tk.Button(hdr,
+            text="🎹 MIDI Learn",
+            font=("Courier", 8, "bold"),
+            bg=C["panel2"], fg=C["accent2"],
+            relief="flat", padx=8, pady=2, cursor="hand2",
+            command=self._me_toggle_learn_mode)
+        self._me_learn_btn.pack(side="right", padx=6)
+
+        tk.Button(hdr, text="💾 Sauvegarder", font=("Courier", 8, "bold"),
+            bg=C["green"], fg=C["bg"], relief="flat", padx=10, pady=2,
+            cursor="hand2", command=self._me_save).pack(side="right", padx=4)
+
+        tk.Label(parent, text="  Sélectionnez un programme :",
+            font=("Courier", 7), fg=C["dim"], bg=C["bg"]).pack(anchor="w", padx=12, pady=(8, 0))
+
+        # Programme selector
+        prog_row = tk.Frame(parent, bg=C["bg"])
+        prog_row.pack(fill="x", padx=12, pady=4)
+        self._me_prog_var = tk.StringVar(value=self._current_prog)
+        for key in self.config.get("programs", {}).keys():
+            tk.Radiobutton(prog_row, text=f"Prog {key}",
+                variable=self._me_prog_var, value=key,
+                font=("Courier", 8), bg=C["bg"], fg=C["text"],
+                selectcolor=C["panel"], activebackground=C["bg"],
+                command=self._me_load_preset).pack(side="left", padx=6)
+
+        tk.Frame(parent, bg=C["border"], height=1).pack(fill="x", padx=12, pady=4)
+
+        # [NEW] Indicateur Learn Mode
+        self._me_learn_status = tk.Label(parent,
+            text="",
+            font=("Courier", 8), fg=C["accent"], bg=C["bg"])
+        self._me_learn_status.pack(anchor="w", padx=12)
+
+        # Scrollable area
+        container = tk.Frame(parent, bg=C["bg"])
+        container.pack(fill="both", expand=True, padx=0, pady=0)
+        canvas = tk.Canvas(container, bg=C["bg"], highlightthickness=0)
+        vsb = ttk.Scrollbar(container, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=vsb.set)
+        vsb.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+        self._me_inner = tk.Frame(canvas, bg=C["bg"])
+        self._me_win_id = canvas.create_window((0, 0), window=self._me_inner, anchor="nw")
+        self._me_inner.bind("<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>",
+            lambda e: canvas.itemconfig(self._me_win_id, width=e.width))
+        canvas.bind_all("<MouseWheel>",
+            lambda e: canvas.yview_scroll(int(-1*(e.delta/120)), "units"))
+        self._me_canvas = canvas
+        self._me_load_preset()
+
+    def _me_toggle_learn_mode(self):
+        """Active/désactive le mode MIDI Learn global dans l'éditeur."""
+        self._me_learn_active = not self._me_learn_active
+        C = self.C
+        if self._me_learn_active:
+            self._me_learn_btn.config(bg=C["accent"], fg=C["bg"], text="⏹ Arrêter Learn")
+            self._me_learn_status.config(
+                text="🔴 Mode MIDI Learn actif — Clique sur [🎹] d'un pad/CC puis appuie sur l'AKAI")
+        else:
+            self._me_learn_btn.config(bg=C["panel2"], fg=C["accent2"], text="🎹 MIDI Learn")
+            self._me_learn_status.config(text="")
+            # Annule tout learn en cours
+            if self._learn_target:
+                _, old_btn, _ = self._learn_target
+                old_btn.config(bg=C["panel2"], fg=C["dim"], text="🎹 Learn")
+            self._learn_target = None
+            self._learn_type   = None
+
+    def _me_load_preset(self):
+        for w in self._me_inner.winfo_children(): w.destroy()
+        key  = self._me_prog_var.get()
+        prog = self.config["programs"].get(key, {})
+        mode = prog.get("mode", "debug")
+        C = self.C
+        # ── Pads
+        tk.Label(self._me_inner, text=" PADS — Bank A",
+            font=("Courier", 8, "bold"), fg=C["accent2"], bg=C["bg"]).pack(anchor="w", padx=8, pady=(8,2))
+        self._me_pad_vars   = {}
+        self._me_pad_frame  = tk.Frame(self._me_inner, bg=C["bg"])
+        self._me_pad_frame.pack(fill="x", padx=8)
+        self._me_build_pad_grid()
+        # ── Knobs
+        tk.Frame(self._me_inner, bg=C["border"], height=1).pack(fill="x", padx=8, pady=6)
+        tk.Label(self._me_inner, text=" KNOBS",
+            font=("Courier", 8, "bold"), fg=C["accent2"], bg=C["bg"]).pack(anchor="w", padx=8, pady=(0,2))
+        knobs = prog.get("knobs", {})
+        self._me_knob_vars = {}
+        for i, (cc, label) in enumerate(zip(KNOB_CC, KNOB_LABELS)):
+            self._me_build_knob_row(i, cc, label, knobs)
+        # ── Mode-specific
+        tk.Frame(self._me_inner, bg=C["border"], height=1).pack(fill="x", padx=8, pady=6)
+        if mode == "gamepad":
+            self._me_build_gamepad_section(prog)
+        elif mode == "obs":
+            self._me_build_obs_section(prog)
+        elif mode == "http":
+            self._me_build_http_section(prog)
+        elif mode == "macro":
+            self._me_build_macro_section(prog)
+
+    def _me_build_pad_grid(self):
+        """Construit la grille des pads avec boutons MIDI Learn individuels."""
+        for w in self._me_pad_frame.winfo_children(): w.destroy()
+        C = self.C
+        key  = self._me_prog_var.get()
+        prog = self.config["programs"].get(key, {})
+        pads = prog.get("pads", {})
+        mode = prog.get("mode", "debug")
+        self._me_pad_vars = {}
+
+        for col_i, note in enumerate(PAD_BANK_A):
+            pad_key = str(note)
+            pad_cfg = pads.get(pad_key, {})
+            col_frame = tk.Frame(self._me_pad_frame, bg=C["bg"])
+            col_frame.grid(row=0, column=col_i, padx=3, pady=3)
+
+            # Label note
+            tk.Label(col_frame, text=note_name(note),
+                font=("Courier", 7), fg=C["dim"], bg=C["bg"]).pack()
+
+            # Champ action
+            opts = BTN_OPTIONS if mode == "gamepad" else MACRO_OPTIONS
+            var = tk.StringVar(value=pad_cfg.get("action", opts[0] if opts else ""))
+            cb = ttk.Combobox(col_frame, textvariable=var,
+                values=opts, width=8, state="readonly", style="H.TCombobox")
+            cb.pack()
+            self._me_pad_vars[pad_key] = var
+
+            # [NEW] Bouton Learn individuel
+            learn_btn = tk.Button(col_frame, text="🎹 Learn",
+                font=("Courier", 6), bg=C["panel2"], fg=C["dim"],
+                relief="flat", padx=2, pady=1, cursor="hand2")
+            learn_btn.pack(pady=(2, 0))
+
+            def _make_learn_cb(p_key, l_btn):
+                def _cb(msg_type, value):
+                    # Met à jour le mapping dans config
+                    k = self._me_prog_var.get()
+                    p = self.config["programs"].get(k, {})
+                    p.setdefault("pads", {})
+                    p["pads"].setdefault(p_key, {})
+                    p["pads"][p_key]["note"] = value
+                    self._log(f"[LEARN] Pad {p_key} → note {value} ({note_name(value)})")
+                    self._me_build_pad_grid()
+                return _cb
+
+            def _make_learn_cmd(p_key, l_btn):
+                def _cmd():
+                    if not self._me_learn_active:
+                        self._me_toggle_learn_mode()
+                    self._start_learn(f"pad {p_key}", l_btn, "note", _make_learn_cb(p_key, l_btn))
+                return _cmd
+
+            learn_btn.config(command=_make_learn_cmd(pad_key, learn_btn))
+
+    def _me_build_knob_row(self, idx, cc, label, knobs):
+        C = self.C
+        row = tk.Frame(self._me_inner, bg=C["bg"])
+        row.pack(fill="x", padx=8, pady=1)
+        tk.Label(row, text=f"{label} (CC{cc})", font=("Courier", 8),
+            fg=C["dim"], bg=C["bg"], width=12, anchor="w").pack(side="left")
+        knob_cfg = knobs.get(str(cc), {})
+        axis_var = tk.StringVar(value=knob_cfg.get("axis", AXIS_OPTIONS[idx % len(AXIS_OPTIONS)]))
+        cb = ttk.Combobox(row, textvariable=axis_var,
+            values=AXIS_OPTIONS, width=12, state="readonly", style="H.TCombobox")
+        cb.pack(side="left", padx=4)
+        self._me_knob_vars[str(cc)] = axis_var
+
+        # [NEW] Bouton Learn CC
+        learn_btn = tk.Button(row, text="🎹 Learn CC",
+            font=("Courier", 6), bg=C["panel2"], fg=C["dim"],
+            relief="flat", padx=4, pady=1, cursor="hand2")
+        learn_btn.pack(side="left", padx=4)
+
+        def _make_cc_learn_cb(cc_key, l_btn):
+            def _cb(msg_type, value):
+                k = self._me_prog_var.get()
+                p = self.config["programs"].get(k, {})
+                p.setdefault("knobs", {})
+                p["knobs"].setdefault(cc_key, {})
+                p["knobs"][cc_key]["cc"] = value
+                self._log(f"[LEARN] Knob {cc_key} → CC{value}")
+                self._me_load_preset()
+            return _cb
+
+        def _make_cc_learn_cmd(cc_key, l_btn):
+            def _cmd():
+                if not self._me_learn_active:
+                    self._me_toggle_learn_mode()
+                self._start_learn(f"knob CC{cc_key}", l_btn, "cc", _make_cc_learn_cb(cc_key, l_btn))
+            return _cmd
+
+        learn_btn.config(command=_make_cc_learn_cmd(str(cc), learn_btn))
+
+    def _me_build_gamepad_section(self, prog):
+        C = self.C
+        tk.Label(self._me_inner, text=" GAMEPAD — Joysticks & Mode",
+            font=("Courier", 8, "bold"), fg=C["accent2"], bg=C["bg"]).pack(anchor="w", padx=8, pady=(0,4))
+        joystick = prog.get("joystick", {})
+        row_l = tk.Frame(self._me_inner, bg=C["bg"]); row_l.pack(fill="x", padx=8, pady=1)
+        tk.Label(row_l, text="Pitch → Axis :", font=("Courier", 8),
+            fg=C["dim"], bg=C["bg"], width=14, anchor="w").pack(side="left")
+        self._me_js_pitch = tk.StringVar(value=joystick.get("pitch", "axis_x"))
+        ttk.Combobox(row_l, textvariable=self._me_js_pitch,
+            values=AXIS_OPTIONS, width=12, state="readonly", style="H.TCombobox").pack(side="left", padx=4)
+        row_m = tk.Frame(self._me_inner, bg=C["bg"]); row_m.pack(fill="x", padx=8, pady=1)
+        tk.Label(row_m, text="Mod → Axis :", font=("Courier", 8),
+            fg=C["dim"], bg=C["bg"], width=14, anchor="w").pack(side="left")
+        self._me_js_mod = tk.StringVar(value=joystick.get("modwheel", "axis_y"))
+        ttk.Combobox(row_m, textvariable=self._me_js_mod,
+            values=AXIS_OPTIONS, width=12, state="readonly", style="H.TCombobox").pack(side="left", padx=4)
+
+    def _me_build_obs_section(self, prog):
+        C = self.C
+        tk.Label(self._me_inner, text=" OBS — Host & Port",
+            font=("Courier", 8, "bold"), fg=C["accent2"], bg=C["bg"]).pack(anchor="w", padx=8, pady=(0,4))
+        row = tk.Frame(self._me_inner, bg=C["bg"]); row.pack(fill="x", padx=8, pady=1)
+        tk.Label(row, text="host:port", font=("Courier", 8),
+            fg=C["dim"], bg=C["bg"], width=12, anchor="w").pack(side="left")
+        self._me_obs_host = tk.StringVar(value=prog.get("host", "localhost"))
+        tk.Entry(row, textvariable=self._me_obs_host, font=("Courier", 8),
+            bg=C["btn"], fg=C["text"], insertbackground=C["accent"],
+            relief="flat", width=14).pack(side="left", padx=4)
+        self._me_obs_port = tk.StringVar(value=str(prog.get("port", 4455)))
+        tk.Entry(row, textvariable=self._me_obs_port, font=("Courier", 8),
+            bg=C["btn"], fg=C["text"], insertbackground=C["accent"],
+            relief="flat", width=6).pack(side="left", padx=2)
+
+    def _me_build_http_section(self, prog):
+        C = self.C
+        tk.Label(self._me_inner, text=" HTTP — Base URL",
+            font=("Courier", 8, "bold"), fg=C["accent2"], bg=C["bg"]).pack(anchor="w", padx=8, pady=(0,4))
+        row = tk.Frame(self._me_inner, bg=C["bg"]); row.pack(fill="x", padx=8, pady=1)
+        tk.Label(row, text="base_url", font=("Courier", 8),
+            fg=C["dim"], bg=C["bg"], width=12, anchor="w").pack(side="left")
+        self._me_http_url = tk.StringVar(value=prog.get("base_url", "http://localhost"))
+        tk.Entry(row, textvariable=self._me_http_url, font=("Courier", 8),
+            bg=C["btn"], fg=C["text"], insertbackground=C["accent"],
+            relief="flat", width=28).pack(side="left", padx=4)
+
+    def _me_build_macro_section(self, prog):
+        C = self.C
+        tk.Label(self._me_inner, text=" MACRO — delay (ms)",
+            font=("Courier", 8, "bold"), fg=C["accent2"], bg=C["bg"]).pack(anchor="w", padx=8, pady=(0,4))
+        row = tk.Frame(self._me_inner, bg=C["bg"]); row.pack(fill="x", padx=8, pady=1)
+        tk.Label(row, text="delay_ms", font=("Courier", 8),
+            fg=C["dim"], bg=C["bg"], width=12, anchor="w").pack(side="left")
+        self._me_macro_delay = tk.StringVar(value=str(prog.get("delay_ms", 50)))
+        tk.Entry(row, textvariable=self._me_macro_delay, font=("Courier", 8),
+            bg=C["btn"], fg=C["text"], insertbackground=C["accent"],
+            relief="flat", width=8).pack(side="left", padx=4)
+
+    def _me_save(self):
+        key  = self._me_prog_var.get()
+        prog = self.config["programs"].get(key, {})
+        # Pads
+        pads = prog.setdefault("pads", {})
+        for pad_key, var in self._me_pad_vars.items():
+            pads.setdefault(pad_key, {})["action"] = var.get()
+        # Knobs
+        knobs = prog.setdefault("knobs", {})
+        for cc_key, var in self._me_knob_vars.items():
+            knobs.setdefault(cc_key, {})["axis"] = var.get()
+        # Gamepad joystick
+        if hasattr(self, "_me_js_pitch"):
+            prog.setdefault("joystick", {})["pitch"]    = self._me_js_pitch.get()
+            prog.setdefault("joystick", {})["modwheel"] = self._me_js_mod.get()
+        # OBS
+        if hasattr(self, "_me_obs_host"):
+            prog["host"] = self._me_obs_host.get()
+            try: prog["port"] = int(self._me_obs_port.get())
+            except ValueError: pass
+        # HTTP
+        if hasattr(self, "_me_http_url"):
+            prog["base_url"] = self._me_http_url.get()
+        # Macro
+        if hasattr(self, "_me_macro_delay"):
+            try: prog["delay_ms"] = int(self._me_macro_delay.get())
+            except ValueError: pass
+        self._save_config()
+        self._log(f"[EDITOR] Prog {key} sauvegardé.")
 
     # ─────────────────────────────────────────────────────────────────────────
     # TEST PANEL
@@ -505,815 +1018,154 @@ class HexPadGUI:
         tk.Label(parent, text="  ⚗ TEST — Vérification indépendante des features",
             font=("Courier", 8, "bold"), fg=C["accent2"], bg=C["bg"]
         ).pack(anchor="w", padx=12, pady=(10, 4))
-
         nb = ttk.Notebook(parent, style="H.TNotebook")
         nb.pack(fill="both", expand=True, padx=8, pady=4)
-
-        # ── Onglet MIDI
         t_midi = tk.Frame(nb, bg=C["bg"])
         nb.add(t_midi, text="  MIDI  ")
         self._build_test_midi(t_midi)
-
-        # ── Onglet HTTP
         t_http = tk.Frame(nb, bg=C["bg"])
         nb.add(t_http, text="  HTTP  ")
         self._build_test_http(t_http)
-
-        # ── Onglet WebSocket
         t_ws = tk.Frame(nb, bg=C["bg"])
         nb.add(t_ws, text="  WS  ")
         self._build_test_ws(t_ws)
-
-        # ── Onglet Bridges
         t_br = tk.Frame(nb, bg=C["bg"])
         nb.add(t_br, text="  Bridges  ")
         self._build_test_bridges(t_br)
-
-        # ── Onglet OLED
         t_oled = tk.Frame(nb, bg=C["bg"])
         nb.add(t_oled, text="  🖥 OLED  ")
         self._build_test_oled(t_oled)
 
-    # ── TEST : OLED ───────────────────────────────────────────────────────────
     def _build_test_oled(self, parent):
-        """Instancie OLEDPanel dans l'onglet OLED du panneau TEST."""
         panel = OLEDPanel(parent, self)
         panel.pack(fill="both", expand=True)
 
-    # ── TEST : MIDI monitor ───────────────────────────────────────────────────
     def _build_test_midi(self, parent):
         C = self.C
         row = tk.Frame(parent, bg=C["bg"])
         row.pack(fill="x", padx=10, pady=8)
         tk.Label(row, text="Device :", font=("Courier", 8), fg=C["dim"], bg=C["bg"]).pack(side="left")
-        self._test_midi_dev_var = tk.StringVar()
-        devices = mido.get_input_names() or ["Aucun"]
-        cb = ttk.Combobox(row, textvariable=self._test_midi_dev_var,
-            values=devices, width=20, state="readonly", style="H.TCombobox")
-        cb.pack(side="left", padx=6)
-        if devices and devices[0] != "Aucun":
-            self._test_midi_dev_var.set(devices[0])
-        self._test_midi_active = False
-        self._test_midi_btn = tk.Button(row, text="▶ Écouter",
-            font=("Courier", 8, "bold"), bg=C["green"], fg=C["bg"],
-            relief="flat", padx=8, cursor="hand2",
-            command=self._test_midi_toggle)
-        self._test_midi_btn.pack(side="left", padx=6)
-        tk.Button(row, text="✕ Vider", font=("Courier", 8),
-            bg=C["btn"], fg=C["dim"], relief="flat", padx=6, cursor="hand2",
-            command=self._test_clear_midi).pack(side="left")
-        self._test_midi_log = scrolledtext.ScrolledText(
-            parent, bg=C["console_bg"], fg=C["console_fg"],
-            font=("Courier", 8), relief="flat", height=10,
+        self._te_midi_dev = tk.StringVar(value=self.device_var.get())
+        ttk.Combobox(row, textvariable=self._te_midi_dev,
+            values=mido.get_input_names() or ["Aucun"], width=22,
+            state="readonly", style="H.TCombobox").pack(side="left", padx=6)
+        tk.Button(row, text="▶ Monitor", font=("Courier", 8, "bold"),
+            bg=C["green"], fg=C["bg"], relief="flat", padx=8, pady=2,
+            cursor="hand2", command=self._te_start_midi_monitor).pack(side="left", padx=4)
+        tk.Button(row, text="■ Stop", font=("Courier", 8),
+            bg=C["red"], fg="white", relief="flat", padx=6, pady=2,
+            cursor="hand2", command=self._te_stop_midi_monitor).pack(side="left", padx=2)
+        self._test_midi_log = scrolledtext.ScrolledText(parent,
+            bg=C["console_bg"], fg=C["console_fg"],
+            font=("Courier", 8), relief="flat", height=12,
             insertbackground=C["accent"])
-        self._test_midi_log.pack(fill="both", expand=True, padx=10, pady=(0, 8))
+        self._test_midi_log.pack(fill="both", expand=True, padx=10, pady=4)
         self._test_midi_log.config(state="disabled")
-        self._test_append("[MIDI TEST] Sélectionne un device et clique Écouter.")
+        self._te_midi_running = False
 
-    def _test_midi_toggle(self):
-        C = self.C
-        if not self._test_midi_active:
-            self._test_midi_active = True
-            self._test_midi_btn.config(text="■ Stop", bg=C["red"], fg="white")
-            self._test_append(f"[MIDI] Écoute sur : {self._test_midi_dev_var.get()}")
-        else:
-            self._test_midi_active = False
-            self._test_midi_btn.config(text="▶ Écouter", bg=C["green"], fg=C["bg"])
-            self._test_append("[MIDI] Arrêt écoute.")
-
-    def _test_clear_midi(self):
-        self._test_midi_log.config(state="normal")
-        self._test_midi_log.delete("1.0", "end")
-        self._test_midi_log.config(state="disabled")
+    def _te_start_midi_monitor(self): self._te_midi_running = True
+    def _te_stop_midi_monitor(self):  self._te_midi_running = False
 
     def _test_append(self, msg):
         if not hasattr(self, "_test_midi_log"): return
-        if not self._test_midi_active and not msg.startswith("[MIDI TEST]") and not msg.startswith("[MIDI] "): return
+        if not self._te_midi_running: return
         self._test_midi_log.config(state="normal")
-        ts = time.strftime("%H:%M:%S")
-        self._test_midi_log.insert("end", f"{ts}  {msg}\n")
+        self._test_midi_log.insert("end", msg + "\n")
         self._test_midi_log.see("end")
         self._test_midi_log.config(state="disabled")
 
-    # ── TEST : HTTP ───────────────────────────────────────────────────────────
     def _build_test_http(self, parent):
         C = self.C
-        f = tk.Frame(parent, bg=C["bg"])
-        f.pack(fill="x", padx=10, pady=8)
-        tk.Label(f, text="Méthode", font=("Courier", 8), fg=C["dim"], bg=C["bg"]).grid(row=0, column=0, sticky="w")
-        self._test_http_method = tk.StringVar(value="GET")
-        ttk.Combobox(f, textvariable=self._test_http_method,
+        row = tk.Frame(parent, bg=C["bg"]); row.pack(fill="x", padx=10, pady=8)
+        tk.Label(row, text="URL :", font=("Courier", 8), fg=C["dim"], bg=C["bg"]).pack(side="left")
+        self._te_http_url = tk.StringVar(value="http://localhost:8080/test")
+        tk.Entry(row, textvariable=self._te_http_url, font=("Courier", 8),
+            bg=C["btn"], fg=C["text"], insertbackground=C["accent"],
+            relief="flat", width=28).pack(side="left", padx=6)
+        self._te_http_method = tk.StringVar(value="GET")
+        ttk.Combobox(row, textvariable=self._te_http_method,
             values=HTTP_METHODS, width=7, state="readonly",
-            style="H.TCombobox").grid(row=0, column=1, padx=4, sticky="w")
-        tk.Label(f, text="URL", font=("Courier", 8), fg=C["dim"], bg=C["bg"]).grid(row=0, column=2, sticky="w", padx=(8,0))
-        self._test_http_url = tk.StringVar(value="http://localhost:8080/test")
-        tk.Entry(f, textvariable=self._test_http_url,
-            bg=C["btn"], fg=C["accent"], font=("Courier", 9),
-            relief="flat", width=28,
-            insertbackground=C["accent"]).grid(row=0, column=3, padx=4, sticky="ew")
-        f.columnconfigure(3, weight=1)
-        f2 = tk.Frame(parent, bg=C["bg"])
-        f2.pack(fill="x", padx=10, pady=(0, 4))
-        tk.Label(f2, text="Body JSON", font=("Courier", 8), fg=C["dim"], bg=C["bg"]).pack(side="left")
-        self._test_http_body = tk.StringVar(value="")
-        tk.Entry(f2, textvariable=self._test_http_body,
-            bg=C["btn"], fg=C["accent2"], font=("Courier", 9),
-            relief="flat", insertbackground=C["accent"]).pack(side="left", fill="x", expand=True, padx=6)
-        tk.Button(f2, text="▶ Envoyer",
-            font=("Courier", 8, "bold"), bg=C["green"], fg=C["bg"],
-            relief="flat", padx=8, cursor="hand2",
-            command=self._test_http_send).pack(side="left")
-        self._test_http_log = scrolledtext.ScrolledText(
-            parent, bg=C["console_bg"], fg=C["console_fg"],
-            font=("Courier", 8), relief="flat", height=8,
+            style="H.TCombobox").pack(side="left", padx=2)
+        tk.Button(row, text="Send", font=("Courier", 8, "bold"),
+            bg=C["green"], fg=C["bg"], relief="flat", padx=8, pady=2,
+            cursor="hand2", command=self._te_send_http).pack(side="left", padx=4)
+        self._te_http_log = scrolledtext.ScrolledText(parent,
+            bg=C["console_bg"], fg=C["console_fg"],
+            font=("Courier", 8), relief="flat", height=10,
             insertbackground=C["accent"])
-        self._test_http_log.pack(fill="both", expand=True, padx=10, pady=(4, 8))
-        self._test_http_log.config(state="disabled")
+        self._te_http_log.pack(fill="both", expand=True, padx=10, pady=4)
+        self._te_http_log.config(state="disabled")
 
-    def _test_http_send(self):
-        import urllib.request, urllib.error
-        method = self._test_http_method.get()
-        url    = self._test_http_url.get().strip()
-        body   = self._test_http_body.get().strip()
-        if not url:
-            self._test_http_append("[ERR] URL vide."); return
-        def do():
+    def _te_send_http(self):
+        import urllib.request
+        url    = self._te_http_url.get()
+        method = self._te_http_method.get()
+        def _do():
             try:
-                data = body.encode() if body else None
-                req  = urllib.request.Request(url, data=data, method=method)
-                if data: req.add_header("Content-Type", "application/json")
+                req = urllib.request.Request(url, method=method)
                 with urllib.request.urlopen(req, timeout=5) as r:
-                    resp = r.read().decode(errors="replace")[:500]
-                    self.root.after(0, self._test_http_append,
-                        f"[{r.status}] {resp}")
-            except urllib.error.HTTPError as e:
-                self.root.after(0, self._test_http_append, f"[HTTP {e.code}] {e.reason}")
+                    body = r.read(200).decode("utf-8", errors="replace")
+                self.root.after(0, self._te_http_append, f"[{r.status}] {body[:120]}")
             except Exception as e:
-                self.root.after(0, self._test_http_append, f"[ERR] {e}")
-        self._test_http_append(f"→ {method} {url}")
-        threading.Thread(target=do, daemon=True).start()
+                self.root.after(0, self._te_http_append, f"[ERR] {e}")
+        threading.Thread(target=_do, daemon=True).start()
 
-    def _test_http_append(self, msg):
-        self._test_http_log.config(state="normal")
-        ts = time.strftime("%H:%M:%S")
-        self._test_http_log.insert("end", f"{ts}  {msg}\n")
-        self._test_http_log.see("end")
-        self._test_http_log.config(state="disabled")
+    def _te_http_append(self, msg):
+        self._te_http_log.config(state="normal")
+        self._te_http_log.insert("end", msg + "\n")
+        self._te_http_log.see("end")
+        self._te_http_log.config(state="disabled")
 
-    # ── TEST : WebSocket ──────────────────────────────────────────────────────
     def _build_test_ws(self, parent):
         C = self.C
-        row = tk.Frame(parent, bg=C["bg"])
-        row.pack(fill="x", padx=10, pady=8)
-        tk.Label(row, text="URL WS :", font=("Courier", 8), fg=C["dim"], bg=C["bg"]).pack(side="left")
-        self._test_ws_url = tk.StringVar(value="ws://localhost:8765")
-        tk.Entry(row, textvariable=self._test_ws_url,
-            bg=C["btn"], fg=C["accent"], font=("Courier", 9),
-            relief="flat", width=24,
-            insertbackground=C["accent"]).pack(side="left", padx=6)
-        self._test_ws_conn_btn = tk.Button(row, text="⚡ Connecter",
-            font=("Courier", 8, "bold"), bg=C["green"], fg=C["bg"],
-            relief="flat", padx=8, cursor="hand2",
-            command=self._test_ws_connect)
-        self._test_ws_conn_btn.pack(side="left")
-        self._test_ws_dot = tk.Label(row, text="●", font=("Courier", 10),
-            fg=C["red"], bg=C["bg"])
-        self._test_ws_dot.pack(side="left", padx=4)
-        send_row = tk.Frame(parent, bg=C["bg"])
-        send_row.pack(fill="x", padx=10, pady=(0, 4))
-        tk.Label(send_row, text="Message :", font=("Courier", 8), fg=C["dim"], bg=C["bg"]).pack(side="left")
-        self._test_ws_msg = tk.StringVar(value='{"action": "ping"}')
-        tk.Entry(send_row, textvariable=self._test_ws_msg,
-            bg=C["btn"], fg=C["accent"], font=("Courier", 9),
-            relief="flat", insertbackground=C["accent"]).pack(side="left", fill="x", expand=True, padx=6)
-        tk.Button(send_row, text="▶ Envoyer",
-            font=("Courier", 8, "bold"), bg=C["accent2"], fg=C["bg"],
-            relief="flat", padx=8, cursor="hand2",
-            command=self._test_ws_send).pack(side="left")
-        self._test_ws_log = scrolledtext.ScrolledText(
-            parent, bg=C["console_bg"], fg=C["console_fg"],
-            font=("Courier", 8), relief="flat", height=8,
+        row = tk.Frame(parent, bg=C["bg"]); row.pack(fill="x", padx=10, pady=8)
+        tk.Label(row, text="URL :", font=("Courier", 8), fg=C["dim"], bg=C["bg"]).pack(side="left")
+        self._te_ws_url = tk.StringVar(value="ws://localhost:8765")
+        tk.Entry(row, textvariable=self._te_ws_url, font=("Courier", 8),
+            bg=C["btn"], fg=C["text"], insertbackground=C["accent"],
+            relief="flat", width=28).pack(side="left", padx=6)
+        tk.Button(row, text="Ping", font=("Courier", 8, "bold"),
+            bg=C["green"], fg=C["bg"], relief="flat", padx=8, pady=2,
+            cursor="hand2", command=self._te_ws_ping).pack(side="left", padx=4)
+        self._te_ws_log = scrolledtext.ScrolledText(parent,
+            bg=C["console_bg"], fg=C["console_fg"],
+            font=("Courier", 8), relief="flat", height=10,
             insertbackground=C["accent"])
-        self._test_ws_log.pack(fill="both", expand=True, padx=10, pady=(4, 8))
-        self._test_ws_log.config(state="disabled")
-        self._test_ws_sock = None
+        self._te_ws_log.pack(fill="both", expand=True, padx=10, pady=4)
+        self._te_ws_log.config(state="disabled")
 
-    def _test_ws_connect(self):
-        C = self.C
-        if self._test_ws_sock:
-            try: self._test_ws_sock.close()
-            except: pass
-            self._test_ws_sock = None
-            self._test_ws_conn_btn.config(text="⚡ Connecter", bg=C["green"], fg=C["bg"])
-            self._test_ws_dot.config(fg=C["red"])
-            self._test_ws_append("[WS] Déconnecté.")
-            return
-        url = self._test_ws_url.get().strip()
-        def do():
-            try:
-                import websocket
-                ws = websocket.WebSocket()
-                ws.connect(url, timeout=5)
-                self._test_ws_sock = ws
-                self.root.after(0, self._test_ws_dot.config, {"fg": C["green"]})
-                self.root.after(0, self._test_ws_conn_btn.config,
-                    {"text": "✕ Déconnecter", "bg": C["red"], "fg": "white"})
-                self.root.after(0, self._test_ws_append, f"[WS] Connecté à {url}")
-            except Exception as e:
-                self.root.after(0, self._test_ws_append, f"[ERR] {e}")
-        threading.Thread(target=do, daemon=True).start()
+    def _te_ws_ping(self):
+        try:
+            import websockets, asyncio
+            async def _ping():
+                async with websockets.connect(self._te_ws_url.get(), open_timeout=3) as ws:
+                    await ws.send('{"type":"ping"}')
+                    resp = await asyncio.wait_for(ws.recv(), timeout=3)
+                    self.root.after(0, self._te_ws_append, f"[PONG] {resp[:120]}")
+            def _run():
+                try: asyncio.run(_ping())
+                except Exception as e:
+                    self.root.after(0, self._te_ws_append, f"[ERR] {e}")
+            threading.Thread(target=_run, daemon=True).start()
+        except ImportError:
+            self._te_ws_append("[ERR] pip install websockets")
 
-    def _test_ws_send(self):
-        if not self._test_ws_sock:
-            self._test_ws_append("[ERR] Non connecté."); return
-        msg = self._test_ws_msg.get()
-        def do():
-            try:
-                self._test_ws_sock.send(msg)
-                resp = self._test_ws_sock.recv()
-                self.root.after(0, self._test_ws_append, f"→ {msg}")
-                self.root.after(0, self._test_ws_append, f"← {resp}")
-            except Exception as e:
-                self.root.after(0, self._test_ws_append, f"[ERR] {e}")
-        threading.Thread(target=do, daemon=True).start()
+    def _te_ws_append(self, msg):
+        self._te_ws_log.config(state="normal")
+        self._te_ws_log.insert("end", msg + "\n")
+        self._te_ws_log.see("end")
+        self._te_ws_log.config(state="disabled")
 
-    def _test_ws_append(self, msg):
-        self._test_ws_log.config(state="normal")
-        ts = time.strftime("%H:%M:%S")
-        self._test_ws_log.insert("end", f"{ts}  {msg}\n")
-        self._test_ws_log.see("end")
-        self._test_ws_log.config(state="disabled")
-
-    # ── TEST : Bridges ────────────────────────────────────────────────────────
     def _build_test_bridges(self, parent):
         C = self.C
         tk.Label(parent,
-            text="  Teste chaque bridge sans démarrer le listener MIDI.",
-            font=("Courier", 7), fg=C["dim"], bg=C["bg"]
-        ).pack(anchor="w", padx=12, pady=(8, 4))
-
-        # Sélecteur de preset à tester
-        row = tk.Frame(parent, bg=C["bg"])
-        row.pack(fill="x", padx=10, pady=4)
-        tk.Label(row, text="Preset :", font=("Courier", 8), fg=C["dim"], bg=C["bg"]).pack(side="left")
-        self._test_br_prog_var = tk.StringVar(value=self._current_prog)
-        prog_keys   = list(self.config.get("programs", {}).keys())
-        prog_labels = [f"{k} — {self.config['programs'][k].get('name','')}" for k in prog_keys]
-        self._test_br_prog_map = dict(zip(prog_labels, prog_keys))
-        cb = ttk.Combobox(row, textvariable=self._test_br_prog_var,
-            values=prog_labels, width=26, state="readonly", style="H.TCombobox")
-        cb.pack(side="left", padx=6)
-        for label, key in self._test_br_prog_map.items():
-            if key == self._current_prog:
-                self._test_br_prog_var.set(label); break
-
-        # Grille de pads cliquables
-        tk.Label(parent, text="  Cliquer un pad = simuler note_on",
-            font=("Courier", 7, "bold"), fg=C["accent2"], bg=C["bg"]
-        ).pack(anchor="w", padx=12, pady=(6, 2))
-        self._test_pad_frame = tk.Frame(parent, bg=C["bg"])
-        self._test_pad_frame.pack(padx=12, pady=4)
-        self._build_test_pad_grid()
-        cb.bind("<<ComboboxSelected>>", lambda e: self._build_test_pad_grid())
-
-        self._test_br_log = scrolledtext.ScrolledText(
-            parent, bg=C["console_bg"], fg=C["console_fg"],
-            font=("Courier", 8), relief="flat", height=6,
-            insertbackground=C["accent"])
-        self._test_br_log.pack(fill="both", expand=True, padx=10, pady=(4, 8))
-        self._test_br_log.config(state="disabled")
-        self._test_br_append("[BRIDGE TEST] Clique un pad pour simuler un event MIDI.")
-
-    def _build_test_pad_grid(self):
-        C = self.C
-        for w in self._test_pad_frame.winfo_children(): w.destroy()
-        label = self._test_br_prog_var.get()
-        key   = self._test_br_prog_map.get(label, self._current_prog)
-        prog  = self.config["programs"].get(key, {})
-        pads  = prog.get("pads", {})
-        notes = PAD_BANK_A
-        layout = [notes[4:8], notes[0:4]]
-        for row_idx, row_notes in enumerate(layout):
-            for col_idx, note in enumerate(row_notes):
-                ns      = str(note)
-                pad_num = notes.index(note) + 1
-                action  = pads.get(ns, "—")
-                short   = (action if isinstance(action, str) else action.get("action", "?") if isinstance(action, dict) else "?")[:8]
-                btn = tk.Button(
-                    self._test_pad_frame,
-                    text=f"P{pad_num}\n{short}",
-                    font=("Courier", 8, "bold"),
-                    bg=C["pad_off"], fg=C["accent"],
-                    activebackground=C["accent"], activeforeground=C["bg"],
-                    relief="flat", width=7, pady=8, cursor="hand2",
-                    command=lambda n=note, p=prog, k=key: self._test_simulate_pad(n, p, k)
-                )
-                btn.grid(row=row_idx, column=col_idx, padx=3, pady=3)
-
-    def _test_simulate_pad(self, note, prog, key):
-        self._test_br_append(f"[SIM] note_on note={note} ({note_name(note)}) — preset {key}")
-        def do():
-            try:
-                bridge, mode = self._build_bridge(prog)
-                if bridge is None:
-                    self.root.after(0, self._test_br_append, f"[DEBUG] mode={mode}, no bridge")
-                    return
-                d = Dispatcher()
-                d.set_bridge(bridge, mode)
-                import mido as _mido
-                msg = _mido.Message("note_on", note=note, velocity=100)
-                d.dispatch(msg)
-                self.root.after(0, self._test_br_append, f"[OK] dispatché → {mode}")
-            except Exception as e:
-                self.root.after(0, self._test_br_append, f"[ERR] {e}")
-        threading.Thread(target=do, daemon=True).start()
-
-    def _test_br_append(self, msg):
-        self._test_br_log.config(state="normal")
-        ts = time.strftime("%H:%M:%S")
-        self._test_br_log.insert("end", f"{ts}  {msg}\n")
-        self._test_br_log.see("end")
-        self._test_br_log.config(state="disabled")
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # MAPPING EDITOR — fenêtre Toplevel dédiée
-    # ─────────────────────────────────────────────────────────────────────────
-    def _open_editor(self):
-        if self._editor_win and self._editor_win.winfo_exists():
-            self._editor_win.lift(); return
-        win = tk.Toplevel(self.root)
-        win.title("HexPad — Mapping Editor")
-        win.configure(bg=self.C["bg"])
-        win.geometry("600x800")
-        win.resizable(True, True)
-        win.minsize(500, 600)
-        self._editor_win = win
-        self._build_mapping_editor(win)
-
-    def _build_mapping_editor(self, parent):
-        C = self.C
-        hdr = tk.Frame(parent, bg=C["panel2"])
-        hdr.pack(fill="x")
-        tk.Label(hdr, text="◈ MAPPING EDITOR", font=("Courier", 10, "bold"),
-            fg=C["accent"], bg=C["panel2"]).pack(side="left", padx=12, pady=8)
-        self._me_save_indicator = tk.Label(hdr, text="", font=("Courier", 8),
-            fg=C["green"], bg=C["panel2"])
-        self._me_save_indicator.pack(side="right", padx=12)
-        tk.Button(hdr, text="↑ Export", font=("Courier", 8), bg=C["btn"], fg=C["accent2"],
-            relief="flat", padx=6, pady=4, cursor="hand2",
-            command=self._me_export_preset).pack(side="right", padx=2)
-        tk.Button(hdr, text="↓ Import", font=("Courier", 8), bg=C["btn"], fg=C["accent2"],
-            relief="flat", padx=6, pady=4, cursor="hand2",
-            command=self._me_import_preset).pack(side="right", padx=2)
-
-        canvas = tk.Canvas(parent, bg=C["bg"], bd=0, highlightthickness=0)
-        sb = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
-        canvas.configure(yscrollcommand=sb.set)
-        sb.pack(side="right", fill="y")
-        canvas.pack(side="left", fill="both", expand=True)
-        body = tk.Frame(canvas, bg=C["bg"])
-        body_win = canvas.create_window((0, 0), window=body, anchor="nw")
-
-        def _on_configure(e): canvas.configure(scrollregion=canvas.bbox("all"))
-        def _on_canvas_resize(e): canvas.itemconfig(body_win, width=e.width)
-        body.bind("<Configure>", _on_configure)
-        canvas.bind("<Configure>", _on_canvas_resize)
-        canvas.bind_all("<MouseWheel>",
-            lambda e: canvas.yview_scroll(int(-1 * (e.delta / 120)), "units"))
-
-        prow = tk.Frame(body, bg=C["bg"])
-        prow.pack(fill="x", padx=12, pady=(10, 4))
-        tk.Label(prow, text="Preset :", font=("Courier", 9, "bold"),
-            fg=C["dim"], bg=C["bg"]).pack(side="left")
-        self._me_prog_var = tk.StringVar(value=self._current_prog)
-        prog_keys   = list(self.config.get("programs", {}).keys())
-        prog_labels = [f"{k} — {self.config['programs'][k].get('name','')}" for k in prog_keys]
-        self._me_prog_map = dict(zip(prog_labels, prog_keys))
-        self._me_prog_cb = ttk.Combobox(prow, textvariable=self._me_prog_var,
-            values=prog_labels, width=28, state="readonly", style="H.TCombobox")
-        self._me_prog_cb.pack(side="left", padx=8)
-        for label, key in self._me_prog_map.items():
-            if key == self._current_prog:
-                self._me_prog_var.set(label); break
-        self._me_prog_cb.bind("<<ComboboxSelected>>", self._me_on_prog_changed)
-        tk.Button(prow, text="+ Nouveau", font=("Courier", 8), bg=C["btn"], fg=C["accent2"],
-            relief="flat", padx=6, pady=4, cursor="hand2",
-            command=self._me_new_preset).pack(side="left", padx=4)
-        tk.Button(prow, text="✕ Suppr", font=("Courier", 8), bg=C["btn"], fg=C["red"],
-            relief="flat", padx=6, pady=4, cursor="hand2",
-            command=self._me_delete_preset).pack(side="left")
-
-        tk.Frame(body, bg=C["border"], height=1).pack(fill="x", padx=12, pady=6)
-
-        meta = tk.Frame(body, bg=C["bg"])
-        meta.pack(fill="x", padx=12)
-        tk.Label(meta, text="Nom", font=("Courier", 8),
-            fg=C["dim"], bg=C["bg"]).grid(row=0, column=0, sticky="w", pady=3)
-        self._me_name_var = tk.StringVar()
-        tk.Entry(meta, textvariable=self._me_name_var,
-            bg=C["btn"], fg=C["accent"], font=("Courier", 9),
-            relief="flat", width=20,
-            insertbackground=C["accent"]).grid(row=0, column=1, padx=8, sticky="w")
-        tk.Label(meta, text="Mode", font=("Courier", 8),
-            fg=C["dim"], bg=C["bg"]).grid(row=0, column=2, sticky="w", padx=(12, 0))
-        self._me_mode_var = tk.StringVar(value="gamepad")
-        mode_cb = ttk.Combobox(meta, textvariable=self._me_mode_var,
-            values=list(MODE_COLORS.keys()), width=14,
-            state="readonly", style="H.TCombobox")
-        mode_cb.grid(row=0, column=3, padx=8, sticky="w")
-        mode_cb.bind("<<ComboboxSelected>>", lambda e: self._me_refresh_mode_fields())
-
-        self._me_conn_frame = tk.Frame(body, bg=C["bg"])
-        self._me_conn_frame.pack(fill="x", padx=12, pady=4)
-        self._me_ws_url_var       = tk.StringVar(value="ws://localhost:8765")
-        self._me_obs_host_var     = tk.StringVar(value="localhost")
-        self._me_obs_port_var     = tk.StringVar(value="4455")
-        self._me_obs_pass_var     = tk.StringVar(value="")
-        self._me_pitch_var        = tk.StringVar(value="")
-        self._me_mod_var          = tk.StringVar(value="")
-        self._me_sounds_dir_var   = tk.StringVar(value="sounds")
-        self._me_http_timeout_var = tk.StringVar(value="3")
-        self._me_music_vol_var    = tk.StringVar(value="1.0")
-        self._me_music_dev_var    = tk.StringVar(value="")
-
-        tk.Frame(body, bg=C["border"], height=1).pack(fill="x", padx=12, pady=6)
-
-        bank_row = tk.Frame(body, bg=C["bg"])
-        bank_row.pack(fill="x", padx=12)
-        tk.Label(bank_row, text="BANK", font=("Courier", 9, "bold"),
-            fg=C["accent2"], bg=C["bg"]).pack(side="left")
-        self._me_bank_var = tk.StringVar(value="A")
-        for bank in ("A", "B"):
-            tk.Radiobutton(bank_row, text=f"  {bank}  ",
-                variable=self._me_bank_var, value=bank,
-                font=("Courier", 9, "bold"),
-                bg=C["bg"], fg=C["accent"],
-                selectcolor=C["btn"], activebackground=C["bg"],
-                command=self._me_build_pad_grid).pack(side="left", padx=4)
-        self._me_show_note_var = tk.BooleanVar(value=True)
-        tk.Checkbutton(bank_row, text="noms de notes",
-            variable=self._me_show_note_var,
-            font=("Courier", 7), bg=C["bg"], fg=C["dim"],
-            selectcolor=C["btn"], activebackground=C["bg"],
-            command=self._me_build_pad_grid).pack(side="right", padx=8)
-
-        tk.Label(body, text="  PADS — layout physique MPK",
-            font=("Courier", 8, "bold"), fg=C["accent2"], bg=C["bg"]
-        ).pack(anchor="w", padx=12, pady=(8, 2))
-        self._me_pad_frame = tk.Frame(body, bg=C["bg"])
-        self._me_pad_frame.pack(fill="x", padx=12, pady=4)
-        self._me_pad_vars     = {}
-        self._me_pad_sub_vars = {}
-
-        tk.Frame(body, bg=C["border"], height=1).pack(fill="x", padx=12, pady=6)
-
-        tk.Label(body, text="  ENCODEURS (CC)", font=("Courier", 8, "bold"),
-            fg=C["accent2"], bg=C["bg"]).pack(anchor="w", padx=12)
-        self._me_knob_frame = tk.Frame(body, bg=C["bg"])
-        self._me_knob_frame.pack(fill="x", padx=12, pady=4)
-        self._me_knob_vars = {}
-
-        pm_row = tk.Frame(body, bg=C["bg"])
-        pm_row.pack(fill="x", padx=12, pady=4)
-        for label, var in (("Pitchwheel →", self._me_pitch_var), ("Modwheel →", self._me_mod_var)):
-            tk.Label(pm_row, text=label, font=("Courier", 8),
-                fg=C["dim"], bg=C["bg"]).pack(side="left")
-            ttk.Combobox(pm_row, textvariable=var,
-                values=[""] + AXIS_OPTIONS, width=10,
-                state="normal", style="H.TCombobox").pack(side="left", padx=(4, 16))
-
-        tk.Frame(body, bg=C["border"], height=1).pack(fill="x", padx=12, pady=8)
-
-        btns = tk.Frame(body, bg=C["bg"])
-        btns.pack(fill="x", padx=12, pady=(0, 16))
-        tk.Button(btns, text="💾  SAUVEGARDER", font=("Courier", 10, "bold"),
-            bg=C["accent"], fg=C["bg"], relief="flat", padx=16, pady=10,
-            cursor="hand2", command=self._me_save).pack(side="left", padx=(0, 8))
-        tk.Button(btns, text="↺  Recharger", font=("Courier", 9),
-            bg=C["btn"], fg=C["dim"], relief="flat", padx=10, pady=10,
-            cursor="hand2", command=self._me_load_preset).pack(side="left")
-
-        self._me_loaded = True
-        self._me_load_preset()
-
-    def _me_export_preset(self):
-        prog = self._get_current_preset()
-        if not prog:
-            messagebox.showwarning("Export", "Aucun preset sélectionné."); return
-        path = filedialog.asksaveasfilename(
-            title="Exporter le preset",
-            defaultextension=".json",
-            filetypes=[("JSON", "*.json"), ("Tous", "*.*")],
-            initialfile=f"hexpad_preset_{self._current_prog}.json"
-        )
-        if not path: return
-        try:
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(prog, f, indent=2, ensure_ascii=False)
-            self._log(f"[EXPORT] {os.path.basename(path)}")
-        except Exception as e:
-            messagebox.showerror("Export", str(e))
-
-    def _me_import_preset(self):
-        path = filedialog.askopenfilename(
-            title="Importer un preset",
-            filetypes=[("JSON", "*.json"), ("Tous", "*.*")])
-        if not path: return
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if not isinstance(data, dict) or "mode" not in data:
-                messagebox.showerror("Import", "Fichier invalide : clé 'mode' manquante."); return
-            choice = messagebox.askyesnocancel(
-                "Import",
-                f"Importer dans le preset {self._current_prog} (Oui)\n"
-                f"ou créer un nouveau slot (Non) ?")
-            if choice is None: return
-            key = self._current_prog if choice else str(
-                max(int(k) for k in self.config["programs"].keys()) + 1)
-            self.config["programs"][key] = data
-            self._save_config()
-            self._current_prog = key
-            self._build_prog_btns(); self._select_program(key)
-            prog_keys   = list(self.config["programs"].keys())
-            prog_labels = [f"{k} — {self.config['programs'][k].get('name','')}" for k in prog_keys]
-            self._me_prog_map = dict(zip(prog_labels, prog_keys))
-            self._me_prog_cb.config(values=prog_labels)
-            for label, k in self._me_prog_map.items():
-                if k == key:
-                    self._me_prog_var.set(label); break
-            self._me_load_preset()
-            self._log(f"[IMPORT] preset {key} chargé")
-        except Exception as e:
-            messagebox.showerror("Import", str(e))
-
-    def _me_on_prog_changed(self, event=None):
-        label = self._me_prog_var.get()
-        key   = self._me_prog_map.get(label, self._current_prog)
-        self._current_prog = key
-        self._select_program(key)
-        self._me_load_preset()
-
-    def _me_new_preset(self):
-        new_key = str(max(int(k) for k in self.config["programs"].keys()) + 1)
-        self.config["programs"][new_key] = {
-            "name": f"Preset {new_key}", "mode": "gamepad", "pads": {}, "knobs": {}}
-        self._save_config()
-        self._build_prog_btns()
-        prog_keys   = list(self.config["programs"].keys())
-        prog_labels = [f"{k} — {self.config['programs'][k].get('name','')}" for k in prog_keys]
-        self._me_prog_map = dict(zip(prog_labels, prog_keys))
-        self._me_prog_cb.config(values=prog_labels)
-        self._current_prog = new_key
-        for label, k in self._me_prog_map.items():
-            if k == new_key: self._me_prog_var.set(label); break
-        self._me_load_preset()
-        self._log(f"[ME] Nouveau preset {new_key}")
-
-    def _me_delete_preset(self):
-        if len(self.config["programs"]) <= 1:
-            messagebox.showwarning("Suppr", "Impossible de supprimer le dernier preset."); return
-        key = self._current_prog
-        if not messagebox.askyesno("Supprimer", f"Supprimer le preset {key} ?"):
-            return
-        del self.config["programs"][key]
-        self._save_config()
-        self._current_prog = list(self.config["programs"].keys())[0]
-        self._build_prog_btns(); self._select_program(self._current_prog)
-        prog_keys   = list(self.config["programs"].keys())
-        prog_labels = [f"{k} — {self.config['programs'][k].get('name','')}" for k in prog_keys]
-        self._me_prog_map = dict(zip(prog_labels, prog_keys))
-        self._me_prog_cb.config(values=prog_labels)
-        for label, k in self._me_prog_map.items():
-            if k == self._current_prog: self._me_prog_var.set(label); break
-        self._me_load_preset()
-        self._log(f"[ME] Preset {key} supprimé")
-
-    def _me_refresh_mode_fields(self):
-        C = self.C
-        for w in self._me_conn_frame.winfo_children(): w.destroy()
-        mode = self._me_mode_var.get()
-        def row(label, var, width=22):
-            f = tk.Frame(self._me_conn_frame, bg=C["bg"])
-            f.pack(fill="x", pady=2)
-            tk.Label(f, text=label, font=("Courier", 8), fg=C["dim"],
-                bg=C["bg"], width=14, anchor="w").pack(side="left")
-            tk.Entry(f, textvariable=var, bg=C["btn"], fg=C["accent"],
-                font=("Courier", 9), relief="flat", width=width,
-                insertbackground=C["accent"]).pack(side="left", padx=4)
-        if mode == "websocket":  row("WS URL", self._me_ws_url_var)
-        elif mode == "obs":
-            row("OBS Host",     self._me_obs_host_var, 16)
-            row("OBS Port",     self._me_obs_port_var, 6)
-            row("OBS Password", self._me_obs_pass_var, 16)
-        elif mode == "sound_preset": row("sounds dir", self._me_sounds_dir_var, 18)
-        elif mode == "http":    row("Timeout (s)", self._me_http_timeout_var, 6)
-        elif mode == "music":
-            row("Volume (0-1)", self._me_music_vol_var, 6)
-            row("Audio device", self._me_music_dev_var, 20)
-
-    def _me_build_pad_grid(self):
-        C = self.C
-        for w in self._me_pad_frame.winfo_children(): w.destroy()
-        self._me_pad_vars     = {}
-        self._me_pad_sub_vars = {}
-        bank   = self._me_bank_var.get()
-        notes  = PAD_BANK_A if bank == "A" else PAD_BANK_B
-        layout = [notes[4:8], notes[0:4]]
-        prog   = self._get_current_preset() or {}
-        pads   = prog.get("pads", {})
-        mode   = prog.get("mode", "debug")
-
-        for row_idx, row_notes in enumerate(layout):
-            for col_idx, note in enumerate(row_notes):
-                ns      = str(note)
-                pad_num = notes.index(note) + 1
-                note_lbl = note_name(note) if self._me_show_note_var.get() else ""
-                raw     = pads.get(ns, {})
-                cell = tk.Frame(self._me_pad_frame, bg=C["panel2"], padx=4, pady=4)
-                cell.grid(row=row_idx, column=col_idx, padx=3, pady=3, sticky="nsew")
-                self._me_pad_frame.columnconfigure(col_idx, weight=1)
-
-                lbl_row = tk.Frame(cell, bg=C["panel2"])
-                lbl_row.pack(fill="x")
-                tk.Label(lbl_row, text=f"P{pad_num}",
-                    font=("Courier", 8, "bold"), fg=C["accent"], bg=C["panel2"]).pack(side="left")
-                if note_lbl:
-                    tk.Label(lbl_row, text=f" {note_lbl}",
-                        font=("Courier", 7), fg=C["dim"], bg=C["panel2"]).pack(side="left")
-
-                # Bouton LEARN
-                learn_btn = tk.Button(lbl_row, text="L",
-                    font=("Courier", 6, "bold"),
-                    bg=C["btn"], fg=C["accent2"],
-                    relief="flat", padx=3, pady=1,
-                    cursor="hand2")
-                learn_btn.pack(side="right", padx=2)
-                learn_btn.config(command=lambda nb=learn_btn, nk=ns: self._me_start_learn(nk, nb))
-
-                if mode in ("gamepad",):
-                    var = tk.StringVar(value=raw if isinstance(raw, str) else raw.get("action", ""))
-                    self._me_pad_vars[ns] = var
-                    cb = ttk.Combobox(cell, textvariable=var,
-                        values=[""] + BTN_OPTIONS + AXIS_OPTIONS,
-                        width=10, style="H.TCombobox")
-                    cb.pack(fill="x", pady=2)
-                elif mode == "macro":
-                    var = tk.StringVar(value=raw if isinstance(raw, str) else raw.get("action", ""))
-                    self._me_pad_vars[ns] = var
-                    cb = ttk.Combobox(cell, textvariable=var,
-                        values=[""] + MACRO_OPTIONS,
-                        width=10, style="H.TCombobox")
-                    cb.pack(fill="x", pady=2)
-                elif mode == "obs":
-                    act_var = tk.StringVar(value=raw.get("action", "") if isinstance(raw, dict) else "")
-                    sub_var = tk.StringVar(value=raw.get("scene", raw.get("source", raw.get("name", ""))) if isinstance(raw, dict) else "")
-                    self._me_pad_vars[ns]     = act_var
-                    self._me_pad_sub_vars[ns] = sub_var
-                    ttk.Combobox(cell, textvariable=act_var,
-                        values=[""] + OBS_ACTIONS,
-                        width=10, style="H.TCombobox").pack(fill="x", pady=2)
-                    tk.Entry(cell, textvariable=sub_var,
-                        bg=C["btn"], fg=C["accent2"], font=("Courier", 8),
-                        relief="flat", insertbackground=C["accent"]).pack(fill="x", pady=1)
-                elif mode == "http":
-                    meth_var = tk.StringVar(value=raw.get("method", "GET") if isinstance(raw, dict) else "GET")
-                    url_var  = tk.StringVar(value=raw.get("url", "")  if isinstance(raw, dict) else "")
-                    self._me_pad_vars[ns]     = meth_var
-                    self._me_pad_sub_vars[ns] = url_var
-                    ttk.Combobox(cell, textvariable=meth_var,
-                        values=HTTP_METHODS, width=7, style="H.TCombobox").pack(fill="x", pady=2)
-                    tk.Entry(cell, textvariable=url_var,
-                        bg=C["btn"], fg=C["accent2"], font=("Courier", 8),
-                        relief="flat", insertbackground=C["accent"]).pack(fill="x", pady=1)
-                elif mode in ("websocket", "sound_preset", "music", "debug"):
-                    var = tk.StringVar(value=raw if isinstance(raw, str) else raw.get("action", "") if isinstance(raw, dict) else "")
-                    self._me_pad_vars[ns] = var
-                    tk.Entry(cell, textvariable=var,
-                        bg=C["btn"], fg=C["accent"], font=("Courier", 8),
-                        relief="flat", insertbackground=C["accent"]).pack(fill="x", pady=2)
-                else:
-                    var = tk.StringVar(value=raw if isinstance(raw, str) else "")
-                    self._me_pad_vars[ns] = var
-                    tk.Entry(cell, textvariable=var,
-                        bg=C["btn"], fg=C["accent"], font=("Courier", 8),
-                        relief="flat", insertbackground=C["accent"]).pack(fill="x", pady=2)
-
-    def _me_start_learn(self, pad_key, btn):
-        btn.config(bg=self.C["accent"], fg=self.C["bg"])
-        self._learn_target = (pad_key, btn)
-        self._log(f"[LEARN] En attente note pour pad {pad_key}…")
-
-    def _me_build_knob_grid(self):
-        C = self.C
-        for w in self._me_knob_frame.winfo_children(): w.destroy()
-        self._me_knob_vars = {}
-        prog  = self._get_current_preset() or {}
-        knobs = prog.get("knobs", {})
-        mode  = prog.get("mode", "debug")
-        for i, cc in enumerate(KNOB_CC):
-            cs  = str(cc)
-            raw = knobs.get(cs, {})
-            cell = tk.Frame(self._me_knob_frame, bg=C["panel2"], padx=4, pady=4)
-            cell.grid(row=i // 4, column=i % 4, padx=3, pady=3, sticky="nsew")
-            self._me_knob_frame.columnconfigure(i % 4, weight=1)
-            tk.Label(cell, text=f"K{i+1}  CC{cc}",
-                font=("Courier", 7, "bold"), fg=C["accent"], bg=C["panel2"]).pack(anchor="w")
-            if mode == "gamepad":
-                var = tk.StringVar(value=raw if isinstance(raw, str) else raw.get("action", ""))
-                self._me_knob_vars[cs] = (var,)
-                ttk.Combobox(cell, textvariable=var,
-                    values=[""] + AXIS_OPTIONS,
-                    width=9, style="H.TCombobox").pack(fill="x", pady=2)
-            else:
-                var = tk.StringVar(value=raw if isinstance(raw, str) else raw.get("action", "") if isinstance(raw, dict) else "")
-                self._me_knob_vars[cs] = (var,)
-                tk.Entry(cell, textvariable=var,
-                    bg=C["btn"], fg=C["accent"], font=("Courier", 8),
-                    relief="flat", insertbackground=C["accent"]).pack(fill="x", pady=2)
-
-    def _me_load_preset(self):
-        prog = self._get_current_preset()
-        if not prog: return
-        self._me_name_var.set(prog.get("name", ""))
-        self._me_mode_var.set(prog.get("mode", "gamepad"))
-        self._me_ws_url_var.set(prog.get("ws_url", "ws://localhost:8765"))
-        self._me_obs_host_var.set(prog.get("obs_host", "localhost"))
-        self._me_obs_port_var.set(str(prog.get("obs_port", 4455)))
-        self._me_obs_pass_var.set(prog.get("obs_password", ""))
-        self._me_pitch_var.set(prog.get("pitchwheel", ""))
-        self._me_mod_var.set(prog.get("modwheel", ""))
-        self._me_sounds_dir_var.set(prog.get("sounds_dir", "sounds"))
-        self._me_http_timeout_var.set(str(prog.get("timeout", 3)))
-        self._me_music_vol_var.set(str(prog.get("volume", 1.0)))
-        self._me_music_dev_var.set(prog.get("audio_device", ""))
-        self._me_refresh_mode_fields()
-        self._me_build_pad_grid()
-        self._me_build_knob_grid()
-
-    def _me_save(self):
-        key  = self._current_prog
-        prog = self.config["programs"].get(key, {})
-        prog["name"] = self._me_name_var.get().strip() or f"Preset {key}"
-        prog["mode"] = self._me_mode_var.get()
-        mode = prog["mode"]
-        if mode == "websocket":  prog["ws_url"]       = self._me_ws_url_var.get()
-        elif mode == "obs":
-            prog["obs_host"]     = self._me_obs_host_var.get()
-            prog["obs_port"]     = int(self._me_obs_port_var.get() or 4455)
-            prog["obs_password"] = self._me_obs_pass_var.get()
-        elif mode == "sound_preset": prog["sounds_dir"] = self._me_sounds_dir_var.get()
-        elif mode == "http":    prog["timeout"] = int(self._me_http_timeout_var.get() or 3)
-        elif mode == "music":
-            try: prog["volume"] = float(self._me_music_vol_var.get())
-            except ValueError: pass
-            prog["audio_device"] = self._me_music_dev_var.get()
-        prog["pitchwheel"] = self._me_pitch_var.get()
-        prog["modwheel"]   = self._me_mod_var.get()
-
-        # Pads
-        pads = {}
-        for ns, var in self._me_pad_vars.items():
-            val = var.get().strip()
-            if not val: continue
-            if ns in self._me_pad_sub_vars:
-                sub = self._me_pad_sub_vars[ns].get().strip()
-                if mode == "obs":
-                    entry = {"action": val}
-                    if val in OBS_NEEDS_SCENE:  entry["scene"]  = sub
-                    if val in OBS_NEEDS_SOURCE: entry["source"] = sub
-                    pads[ns] = entry
-                elif mode == "http":
-                    pads[ns] = {"method": val, "url": sub}
-                else:
-                    pads[ns] = val
-            else:
-                pads[ns] = val
-        prog["pads"] = pads
-
-        # Knobs
-        knobs = {}
-        for cs, var_tuple in self._me_knob_vars.items():
-            val = var_tuple[0].get().strip() if var_tuple else ""
-            if val: knobs[cs] = val
-        prog["knobs"] = knobs
-
-        self.config["programs"][key] = prog
-        self._save_config()
-        self._build_prog_btns()
-        self._select_program(key)
-        self._me_save_indicator.config(text="✓ sauvegardé")
-        self.after_idle = self.root.after(2000, lambda: self._me_save_indicator.config(text=""))
-        self._log(f"[ME] Preset {key} sauvegardé")
+            text="  Testez chaque bridge indépendamment depuis l'onglet TEST.",
+            font=("Courier", 8), fg=C["dim"], bg=C["bg"]).pack(anchor="w", padx=12, pady=16)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-def main():
+if __name__ == "__main__":
     root = tk.Tk()
     app  = HexPadGUI(root)
     root.protocol("WM_DELETE_WINDOW", app.on_close)
     root.mainloop()
-
-
-if __name__ == "__main__":
-    main()
