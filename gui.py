@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-HexPad GUI v2.2.0
+HexPad GUI v2.3.0
   - Fenêtre unique redimensionnable
   - Mapping Editor en Toplevel dédié (bouton ⚙ dans le header)
   - Console rétractable (toggle ▾/▴)
-  - Panneau TEST intégré (notebook) : MIDI monitor, HTTP, WebSocket, Bridges
+  - Panneau TEST intégré (notebook) : MIDI monitor, HTTP, WebSocket, Bridges, OLED
   - Mode/taille de fenêtre sauvegardés silencieusement
 """
 import tkinter as tk
@@ -21,6 +21,7 @@ from modules.combo_engine     import ComboEngine
 from modules.themes           import DARK, LIGHT, MODE_COLORS, get as get_theme
 from modules.http_bridge      import HttpBridge
 from modules.sound_preset_bridge import SoundPresetBridge
+from modules.display_panel    import OLEDPanel
 
 try:
     from modules.music_bridge import MusicBridge
@@ -28,7 +29,7 @@ try:
 except ImportError:
     MUSIC_OK = False
 
-VERSION = "2.2.0"
+VERSION = "2.3.0"
 
 DEFAULT_W, DEFAULT_H = 520, 820
 MIN_W,     MIN_H     = 460, 600
@@ -527,6 +528,17 @@ class HexPadGUI:
         t_br = tk.Frame(nb, bg=C["bg"])
         nb.add(t_br, text="  Bridges  ")
         self._build_test_bridges(t_br)
+
+        # ── Onglet OLED
+        t_oled = tk.Frame(nb, bg=C["bg"])
+        nb.add(t_oled, text="  🖥 OLED  ")
+        self._build_test_oled(t_oled)
+
+    # ── TEST : OLED ───────────────────────────────────────────────────────────
+    def _build_test_oled(self, parent):
+        """Instancie OLEDPanel dans l'onglet OLED du panneau TEST."""
+        panel = OLEDPanel(parent, self)
+        panel.pack(fill="both", expand=True)
 
     # ── TEST : MIDI monitor ───────────────────────────────────────────────────
     def _build_test_midi(self, parent):
@@ -1028,27 +1040,203 @@ class HexPadGUI:
             self._me_prog_map = dict(zip(prog_labels, prog_keys))
             self._me_prog_cb.config(values=prog_labels)
             for label, k in self._me_prog_map.items():
-                if k == key: self._me_prog_var.set(label); break
+                if k == key:
+                    self._me_prog_var.set(label); break
             self._me_load_preset()
-            self._log(f"[IMPORT] {os.path.basename(path)} → slot {key}")
+            self._log(f"[IMPORT] preset {key} chargé")
         except Exception as e:
             messagebox.showerror("Import", str(e))
 
     def _me_on_prog_changed(self, event=None):
         label = self._me_prog_var.get()
-        key   = self._me_prog_map.get(label, label)
+        key   = self._me_prog_map.get(label, self._current_prog)
         self._current_prog = key
-        for k, (b, col) in self.prog_btns.items():
-            b.config(
-                bg=col if k == key else self.C["btn"],
-                fg=self.C["sel_fg"] if k == key else col)
+        self._select_program(key)
         self._me_load_preset()
+
+    def _me_new_preset(self):
+        new_key = str(max(int(k) for k in self.config["programs"].keys()) + 1)
+        self.config["programs"][new_key] = {
+            "name": f"Preset {new_key}", "mode": "gamepad", "pads": {}, "knobs": {}}
+        self._save_config()
+        self._build_prog_btns()
+        prog_keys   = list(self.config["programs"].keys())
+        prog_labels = [f"{k} — {self.config['programs'][k].get('name','')}" for k in prog_keys]
+        self._me_prog_map = dict(zip(prog_labels, prog_keys))
+        self._me_prog_cb.config(values=prog_labels)
+        self._current_prog = new_key
+        for label, k in self._me_prog_map.items():
+            if k == new_key: self._me_prog_var.set(label); break
+        self._me_load_preset()
+        self._log(f"[ME] Nouveau preset {new_key}")
+
+    def _me_delete_preset(self):
+        if len(self.config["programs"]) <= 1:
+            messagebox.showwarning("Suppr", "Impossible de supprimer le dernier preset."); return
+        key = self._current_prog
+        if not messagebox.askyesno("Supprimer", f"Supprimer le preset {key} ?"):
+            return
+        del self.config["programs"][key]
+        self._save_config()
+        self._current_prog = list(self.config["programs"].keys())[0]
+        self._build_prog_btns(); self._select_program(self._current_prog)
+        prog_keys   = list(self.config["programs"].keys())
+        prog_labels = [f"{k} — {self.config['programs'][k].get('name','')}" for k in prog_keys]
+        self._me_prog_map = dict(zip(prog_labels, prog_keys))
+        self._me_prog_cb.config(values=prog_labels)
+        for label, k in self._me_prog_map.items():
+            if k == self._current_prog: self._me_prog_var.set(label); break
+        self._me_load_preset()
+        self._log(f"[ME] Preset {key} supprimé")
+
+    def _me_refresh_mode_fields(self):
+        C = self.C
+        for w in self._me_conn_frame.winfo_children(): w.destroy()
+        mode = self._me_mode_var.get()
+        def row(label, var, width=22):
+            f = tk.Frame(self._me_conn_frame, bg=C["bg"])
+            f.pack(fill="x", pady=2)
+            tk.Label(f, text=label, font=("Courier", 8), fg=C["dim"],
+                bg=C["bg"], width=14, anchor="w").pack(side="left")
+            tk.Entry(f, textvariable=var, bg=C["btn"], fg=C["accent"],
+                font=("Courier", 9), relief="flat", width=width,
+                insertbackground=C["accent"]).pack(side="left", padx=4)
+        if mode == "websocket":  row("WS URL", self._me_ws_url_var)
+        elif mode == "obs":
+            row("OBS Host",     self._me_obs_host_var, 16)
+            row("OBS Port",     self._me_obs_port_var, 6)
+            row("OBS Password", self._me_obs_pass_var, 16)
+        elif mode == "sound_preset": row("sounds dir", self._me_sounds_dir_var, 18)
+        elif mode == "http":    row("Timeout (s)", self._me_http_timeout_var, 6)
+        elif mode == "music":
+            row("Volume (0-1)", self._me_music_vol_var, 6)
+            row("Audio device", self._me_music_dev_var, 20)
+
+    def _me_build_pad_grid(self):
+        C = self.C
+        for w in self._me_pad_frame.winfo_children(): w.destroy()
+        self._me_pad_vars     = {}
+        self._me_pad_sub_vars = {}
+        bank   = self._me_bank_var.get()
+        notes  = PAD_BANK_A if bank == "A" else PAD_BANK_B
+        layout = [notes[4:8], notes[0:4]]
+        prog   = self._get_current_preset() or {}
+        pads   = prog.get("pads", {})
+        mode   = prog.get("mode", "debug")
+
+        for row_idx, row_notes in enumerate(layout):
+            for col_idx, note in enumerate(row_notes):
+                ns      = str(note)
+                pad_num = notes.index(note) + 1
+                note_lbl = note_name(note) if self._me_show_note_var.get() else ""
+                raw     = pads.get(ns, {})
+                cell = tk.Frame(self._me_pad_frame, bg=C["panel2"], padx=4, pady=4)
+                cell.grid(row=row_idx, column=col_idx, padx=3, pady=3, sticky="nsew")
+                self._me_pad_frame.columnconfigure(col_idx, weight=1)
+
+                lbl_row = tk.Frame(cell, bg=C["panel2"])
+                lbl_row.pack(fill="x")
+                tk.Label(lbl_row, text=f"P{pad_num}",
+                    font=("Courier", 8, "bold"), fg=C["accent"], bg=C["panel2"]).pack(side="left")
+                if note_lbl:
+                    tk.Label(lbl_row, text=f" {note_lbl}",
+                        font=("Courier", 7), fg=C["dim"], bg=C["panel2"]).pack(side="left")
+
+                # Bouton LEARN
+                learn_btn = tk.Button(lbl_row, text="L",
+                    font=("Courier", 6, "bold"),
+                    bg=C["btn"], fg=C["accent2"],
+                    relief="flat", padx=3, pady=1,
+                    cursor="hand2")
+                learn_btn.pack(side="right", padx=2)
+                learn_btn.config(command=lambda nb=learn_btn, nk=ns: self._me_start_learn(nk, nb))
+
+                if mode in ("gamepad",):
+                    var = tk.StringVar(value=raw if isinstance(raw, str) else raw.get("action", ""))
+                    self._me_pad_vars[ns] = var
+                    cb = ttk.Combobox(cell, textvariable=var,
+                        values=[""] + BTN_OPTIONS + AXIS_OPTIONS,
+                        width=10, style="H.TCombobox")
+                    cb.pack(fill="x", pady=2)
+                elif mode == "macro":
+                    var = tk.StringVar(value=raw if isinstance(raw, str) else raw.get("action", ""))
+                    self._me_pad_vars[ns] = var
+                    cb = ttk.Combobox(cell, textvariable=var,
+                        values=[""] + MACRO_OPTIONS,
+                        width=10, style="H.TCombobox")
+                    cb.pack(fill="x", pady=2)
+                elif mode == "obs":
+                    act_var = tk.StringVar(value=raw.get("action", "") if isinstance(raw, dict) else "")
+                    sub_var = tk.StringVar(value=raw.get("scene", raw.get("source", raw.get("name", ""))) if isinstance(raw, dict) else "")
+                    self._me_pad_vars[ns]     = act_var
+                    self._me_pad_sub_vars[ns] = sub_var
+                    ttk.Combobox(cell, textvariable=act_var,
+                        values=[""] + OBS_ACTIONS,
+                        width=10, style="H.TCombobox").pack(fill="x", pady=2)
+                    tk.Entry(cell, textvariable=sub_var,
+                        bg=C["btn"], fg=C["accent2"], font=("Courier", 8),
+                        relief="flat", insertbackground=C["accent"]).pack(fill="x", pady=1)
+                elif mode == "http":
+                    meth_var = tk.StringVar(value=raw.get("method", "GET") if isinstance(raw, dict) else "GET")
+                    url_var  = tk.StringVar(value=raw.get("url", "")  if isinstance(raw, dict) else "")
+                    self._me_pad_vars[ns]     = meth_var
+                    self._me_pad_sub_vars[ns] = url_var
+                    ttk.Combobox(cell, textvariable=meth_var,
+                        values=HTTP_METHODS, width=7, style="H.TCombobox").pack(fill="x", pady=2)
+                    tk.Entry(cell, textvariable=url_var,
+                        bg=C["btn"], fg=C["accent2"], font=("Courier", 8),
+                        relief="flat", insertbackground=C["accent"]).pack(fill="x", pady=1)
+                elif mode in ("websocket", "sound_preset", "music", "debug"):
+                    var = tk.StringVar(value=raw if isinstance(raw, str) else raw.get("action", "") if isinstance(raw, dict) else "")
+                    self._me_pad_vars[ns] = var
+                    tk.Entry(cell, textvariable=var,
+                        bg=C["btn"], fg=C["accent"], font=("Courier", 8),
+                        relief="flat", insertbackground=C["accent"]).pack(fill="x", pady=2)
+                else:
+                    var = tk.StringVar(value=raw if isinstance(raw, str) else "")
+                    self._me_pad_vars[ns] = var
+                    tk.Entry(cell, textvariable=var,
+                        bg=C["btn"], fg=C["accent"], font=("Courier", 8),
+                        relief="flat", insertbackground=C["accent"]).pack(fill="x", pady=2)
+
+    def _me_start_learn(self, pad_key, btn):
+        btn.config(bg=self.C["accent"], fg=self.C["bg"])
+        self._learn_target = (pad_key, btn)
+        self._log(f"[LEARN] En attente note pour pad {pad_key}…")
+
+    def _me_build_knob_grid(self):
+        C = self.C
+        for w in self._me_knob_frame.winfo_children(): w.destroy()
+        self._me_knob_vars = {}
+        prog  = self._get_current_preset() or {}
+        knobs = prog.get("knobs", {})
+        mode  = prog.get("mode", "debug")
+        for i, cc in enumerate(KNOB_CC):
+            cs  = str(cc)
+            raw = knobs.get(cs, {})
+            cell = tk.Frame(self._me_knob_frame, bg=C["panel2"], padx=4, pady=4)
+            cell.grid(row=i // 4, column=i % 4, padx=3, pady=3, sticky="nsew")
+            self._me_knob_frame.columnconfigure(i % 4, weight=1)
+            tk.Label(cell, text=f"K{i+1}  CC{cc}",
+                font=("Courier", 7, "bold"), fg=C["accent"], bg=C["panel2"]).pack(anchor="w")
+            if mode == "gamepad":
+                var = tk.StringVar(value=raw if isinstance(raw, str) else raw.get("action", ""))
+                self._me_knob_vars[cs] = (var,)
+                ttk.Combobox(cell, textvariable=var,
+                    values=[""] + AXIS_OPTIONS,
+                    width=9, style="H.TCombobox").pack(fill="x", pady=2)
+            else:
+                var = tk.StringVar(value=raw if isinstance(raw, str) else raw.get("action", "") if isinstance(raw, dict) else "")
+                self._me_knob_vars[cs] = (var,)
+                tk.Entry(cell, textvariable=var,
+                    bg=C["btn"], fg=C["accent"], font=("Courier", 8),
+                    relief="flat", insertbackground=C["accent"]).pack(fill="x", pady=2)
 
     def _me_load_preset(self):
         prog = self._get_current_preset()
         if not prog: return
-        self._me_name_var.set(prog.get("name", f"Programme {self._current_prog}"))
-        self._me_mode_var.set(prog.get("mode", "debug"))
+        self._me_name_var.set(prog.get("name", ""))
+        self._me_mode_var.set(prog.get("mode", "gamepad"))
         self._me_ws_url_var.set(prog.get("ws_url", "ws://localhost:8765"))
         self._me_obs_host_var.set(prog.get("obs_host", "localhost"))
         self._me_obs_port_var.set(str(prog.get("obs_port", 4455)))
@@ -1056,336 +1244,67 @@ class HexPadGUI:
         self._me_pitch_var.set(prog.get("pitchwheel", ""))
         self._me_mod_var.set(prog.get("modwheel", ""))
         self._me_sounds_dir_var.set(prog.get("sounds_dir", "sounds"))
-        self._me_http_timeout_var.set(str(prog.get("http_timeout", 3)))
-        self._me_music_vol_var.set(str(prog.get("music_volume", 1.0)))
-        self._me_music_dev_var.set(prog.get("music_device", ""))
+        self._me_http_timeout_var.set(str(prog.get("timeout", 3)))
+        self._me_music_vol_var.set(str(prog.get("volume", 1.0)))
+        self._me_music_dev_var.set(prog.get("audio_device", ""))
         self._me_refresh_mode_fields()
         self._me_build_pad_grid()
         self._me_build_knob_grid()
 
-    def _me_refresh_mode_fields(self):
-        C = self.C
-        for w in self._me_conn_frame.winfo_children(): w.destroy()
-        mode = self._me_mode_var.get()
-
-        def lbl(text): return tk.Label(self._me_conn_frame, text=text,
-            font=("Courier", 8), fg=C["dim"], bg=C["bg"])
-        def ent(var, w=20): return tk.Entry(self._me_conn_frame,
-            textvariable=var, bg=C["btn"], fg=C["accent"],
-            font=("Courier", 9), relief="flat",
-            insertbackground=C["accent"], width=w)
-
-        col = 0
-        if mode == "websocket":
-            lbl("WS URL").grid(row=0, column=col, sticky="w", padx=(0, 4)); col += 1
-            ent(self._me_ws_url_var, 26).grid(row=0, column=col, sticky="w"); col += 1
-        elif mode == "obs":
-            lbl("Host").grid(row=0, column=col, sticky="w", padx=(0, 4)); col += 1
-            ent(self._me_obs_host_var, 14).grid(row=0, column=col, sticky="w"); col += 1
-            lbl("Port").grid(row=0, column=col, sticky="w", padx=(8, 4)); col += 1
-            ent(self._me_obs_port_var, 5).grid(row=0, column=col, sticky="w"); col += 1
-            lbl("Password").grid(row=0, column=col, sticky="w", padx=(8, 4)); col += 1
-            ent(self._me_obs_pass_var, 16).grid(row=0, column=col, sticky="w"); col += 1
-        elif mode in ("sound_preset", "music"):
-            lbl("Sons dir").grid(row=0, column=col, sticky="w", padx=(0, 4)); col += 1
-            ent(self._me_sounds_dir_var, 14).grid(row=0, column=col, sticky="w"); col += 1
-            if mode == "music":
-                lbl("Volume").grid(row=0, column=col, sticky="w", padx=(8, 4)); col += 1
-                ent(self._me_music_vol_var, 4).grid(row=0, column=col, sticky="w"); col += 1
-                lbl("Device").grid(row=0, column=col, sticky="w", padx=(8, 4)); col += 1
-                dev_names = [""] + (
-                    [d[1] for d in __import__("modules.music_bridge",
-                        fromlist=["list_output_devices"]).list_output_devices()]
-                    if MUSIC_OK else [])
-                ttk.Combobox(self._me_conn_frame,
-                    textvariable=self._me_music_dev_var,
-                    values=dev_names, width=18,
-                    state="normal", style="H.TCombobox"
-                ).grid(row=0, column=col, sticky="w"); col += 1
-        elif mode == "http":
-            lbl("Timeout (s)").grid(row=0, column=col, sticky="w", padx=(0, 4)); col += 1
-            ent(self._me_http_timeout_var, 4).grid(row=0, column=col, sticky="w"); col += 1
-            lbl("— méthode + URL par pad ci-dessous"
-                ).grid(row=0, column=col, sticky="w", padx=(12, 0))
-        if hasattr(self, "_me_pad_frame"): self._me_build_pad_grid()
-        if hasattr(self, "_me_knob_frame"): self._me_build_knob_grid()
-
-    def _me_build_pad_grid(self):
-        C = self.C
-        for w in self._me_pad_frame.winfo_children(): w.destroy()
-        self._me_pad_vars.clear(); self._me_pad_sub_vars.clear()
-        mode      = self._me_mode_var.get() if hasattr(self, "_me_mode_var") else "gamepad"
-        bank      = self._me_bank_var.get() if hasattr(self, "_me_bank_var") else "A"
-        notes     = PAD_BANK_A if bank == "A" else PAD_BANK_B
-        prog      = self._get_current_preset() or {}
-        pads_key  = "pads" if bank == "A" else "pads_bank_b"
-        pads      = prog.get(pads_key, {})
-        show_note = self._me_show_note_var.get() if hasattr(self, "_me_show_note_var") else True
-        if   mode == "gamepad":                  pad_opts = BTN_OPTIONS
-        elif mode == "macro":                    pad_opts = MACRO_OPTIONS
-        elif mode == "obs":                      pad_opts = OBS_ACTIONS
-        elif mode in ("sound_preset", "music"): pad_opts = None
-        elif mode == "http":                     pad_opts = "http"
-        else:                                    pad_opts = None
-        layout = [notes[4:8], notes[0:4]]
-        for row_idx, row_notes in enumerate(layout):
-            for col_idx, note in enumerate(row_notes):
-                ns      = str(note)
-                pad_num = notes.index(note) + 1
-                nn      = note_name(note)
-                raw     = pads.get(ns, "")
-                card = tk.Frame(self._me_pad_frame, bg=C["panel2"],
-                    relief="flat", padx=4, pady=4)
-                card.grid(row=row_idx, column=col_idx, padx=3, pady=3, sticky="nsew")
-                self._me_pad_frame.columnconfigure(col_idx, weight=1)
-                h = tk.Frame(card, bg=C["panel2"]); h.pack(fill="x")
-                pad_label = f"P{pad_num}" + (f"  {nn}" if show_note else "")
-                tk.Label(h, text=pad_label, font=("Courier", 7, "bold"),
-                    fg=C["accent"], bg=C["panel2"]).pack(side="left")
-                tk.Label(h, text=f"n{note}", font=("Courier", 6),
-                    fg=C["dim"], bg=C["panel2"]).pack(side="left", padx=2)
-                learn_btn = tk.Button(h, text="◎", font=("Courier", 7),
-                    bg=C["panel2"], fg=C["dim"], relief="flat",
-                    cursor="hand2", pady=0, padx=2)
-                learn_btn.pack(side="right")
-                learn_btn.config(
-                    command=lambda ns=ns, b=learn_btn: self._me_midi_learn(ns, b))
-                if mode == "obs":
-                    if isinstance(raw, dict):
-                        act_val = raw.get("action", "")
-                        sub_val = raw.get("scene", raw.get("source", raw.get("hotkey", "")))
-                    else:
-                        act_val, sub_val = raw if raw else "", ""
-                    act_var = tk.StringVar(value=act_val)
-                    sub_var = tk.StringVar(value=sub_val)
-                    self._me_pad_vars[ns]     = act_var
-                    self._me_pad_sub_vars[ns] = sub_var
-                    ttk.Combobox(card, textvariable=act_var,
-                        values=[""] + OBS_ACTIONS, width=11,
-                        state="normal", style="H.TCombobox").pack(fill="x")
-                    tk.Entry(card, textvariable=sub_var,
-                        bg=C["btn"], fg=C["accent2"], font=("Courier", 7),
-                        relief="flat", width=12,
-                        insertbackground=C["accent"]).pack(fill="x", pady=(2, 0))
-                elif mode in ("sound_preset", "music"):
-                    if isinstance(raw, dict):
-                        file_val = raw.get("file", "")
-                        vol_val  = str(raw.get("volume", "1.0"))
-                        loop_val = raw.get("loop", False)
-                    elif raw == "stop_all":
-                        file_val, vol_val, loop_val = "stop_all", "1.0", False
-                    else:
-                        file_val, vol_val, loop_val = raw, "1.0", False
-                    file_var = tk.StringVar(value=file_val)
-                    vol_var  = tk.StringVar(value=vol_val)
-                    loop_var = tk.BooleanVar(value=loop_val)
-                    self._me_pad_vars[ns]     = file_var
-                    self._me_pad_sub_vars[ns] = (vol_var, loop_var)
-                    tk.Entry(card, textvariable=file_var,
-                        bg=C["btn"], fg=C["accent"], font=("Courier", 7),
-                        relief="flat", insertbackground=C["accent"]).pack(fill="x")
-                    vol_row = tk.Frame(card, bg=C["panel2"])
-                    vol_row.pack(fill="x", pady=(2, 0))
-                    tk.Label(vol_row, text="vol", font=("Courier", 6),
-                        fg=C["dim"], bg=C["panel2"]).pack(side="left")
-                    tk.Entry(vol_row, textvariable=vol_var,
-                        bg=C["btn"], fg=C["accent2"], font=("Courier", 7),
-                        relief="flat", width=4,
-                        insertbackground=C["accent"]).pack(side="left", padx=2)
-                    tk.Checkbutton(vol_row, text="loop", variable=loop_var,
-                        font=("Courier", 6), bg=C["panel2"], fg=C["dim"],
-                        selectcolor=C["btn"],
-                        activebackground=C["panel2"]).pack(side="left", padx=4)
-                elif mode == "http":
-                    if isinstance(raw, dict):
-                        method_val = raw.get("method", "GET")
-                        url_val    = raw.get("url", "")
-                        body_val   = json.dumps(raw.get("body", ""), ensure_ascii=False) if raw.get("body") else ""
-                    else:
-                        method_val, url_val, body_val = "GET", raw or "", ""
-                    method_var = tk.StringVar(value=method_val)
-                    url_var    = tk.StringVar(value=url_val)
-                    body_var   = tk.StringVar(value=body_val)
-                    self._me_pad_vars[ns]     = url_var
-                    self._me_pad_sub_vars[ns] = (method_var, body_var)
-                    m_row = tk.Frame(card, bg=C["panel2"])
-                    m_row.pack(fill="x")
-                    ttk.Combobox(m_row, textvariable=method_var,
-                        values=HTTP_METHODS, width=6,
-                        state="readonly", style="H.TCombobox").pack(side="left")
-                    tk.Entry(m_row, textvariable=url_var,
-                        bg=C["btn"], fg=C["accent"], font=("Courier", 7),
-                        relief="flat", insertbackground=C["accent"]
-                    ).pack(side="left", fill="x", expand=True, padx=(2, 0))
-                    tk.Entry(card, textvariable=body_var,
-                        bg=C["btn"], fg=C["accent2"], font=("Courier", 6),
-                        relief="flat",
-                        insertbackground=C["accent"]).pack(fill="x", pady=(2, 0))
-                elif pad_opts is not None:
-                    var = tk.StringVar(value=raw if isinstance(raw, str) else "")
-                    self._me_pad_vars[ns] = var
-                    ttk.Combobox(card, textvariable=var,
-                        values=[""] + pad_opts, width=11,
-                        state="normal", style="H.TCombobox").pack(fill="x")
-                else:
-                    var = tk.StringVar(value=raw if isinstance(raw, str) else "")
-                    self._me_pad_vars[ns] = var
-                    tk.Entry(card, textvariable=var,
-                        bg=C["btn"], fg=C["accent"], font=("Courier", 8),
-                        relief="flat",
-                        insertbackground=C["accent"]).pack(fill="x")
-
-    def _me_build_knob_grid(self):
-        C = self.C
-        for w in self._me_knob_frame.winfo_children(): w.destroy()
-        self._me_knob_vars = {}
-        mode  = self._me_mode_var.get() if hasattr(self, "_me_mode_var") else "gamepad"
-        prog  = self._get_current_preset() or {}
-        knobs = prog.get("knobs", {})
-        knob_opts = AXIS_OPTIONS if mode == "gamepad" else []
-        for i, cc in enumerate(KNOB_CC):
-            cell = tk.Frame(self._me_knob_frame, bg=C["panel2"], padx=3, pady=4)
-            cell.grid(row=0, column=i, padx=2, pady=2, sticky="nsew")
-            self._me_knob_frame.columnconfigure(i, weight=1)
-            tk.Label(cell, text=KNOB_LABELS[i], font=("Courier", 8, "bold"),
-                fg=C["accent"], bg=C["panel2"]).pack()
-            tk.Label(cell, text=f"CC{cc}", font=("Courier", 6),
-                fg=C["dim"], bg=C["panel2"]).pack()
-            var = tk.StringVar(value=knobs.get(str(cc), ""))
-            self._me_knob_vars[str(cc)] = var
-            if knob_opts:
-                ttk.Combobox(cell, textvariable=var,
-                    values=[""] + knob_opts, width=7,
-                    state="normal", style="H.TCombobox").pack(fill="x")
-            else:
-                tk.Entry(cell, textvariable=var,
-                    bg=C["btn"], fg=C["accent"], font=("Courier", 7),
-                    relief="flat", insertbackground=C["accent"]).pack(fill="x")
-
-    def _me_midi_learn(self, pad_key, btn):
-        if self._learn_target:
-            self._learn_target[1].config(bg=self.C["panel2"], fg=self.C["dim"])
-        self._learn_target = (pad_key, btn)
-        btn.config(bg=self.C["learn"], fg="white")
-        self._log("[LEARN] Appuie sur le pad physique…")
-
-    def _me_collect_preset(self):
-        mode = self._me_mode_var.get()
-        prog = {"mode": mode, "name": self._me_name_var.get()}
-        if mode == "websocket": prog["ws_url"] = self._me_ws_url_var.get()
-        if mode == "obs":
-            prog["obs_host"]     = self._me_obs_host_var.get()
-            try:   prog["obs_port"] = int(self._me_obs_port_var.get())
-            except: prog["obs_port"] = 4455
-            prog["obs_password"] = self._me_obs_pass_var.get()
-        if mode in ("sound_preset", "music"):
-            prog["sounds_dir"] = self._me_sounds_dir_var.get()
-        if mode == "music":
-            try:   prog["music_volume"] = float(self._me_music_vol_var.get())
-            except: prog["music_volume"] = 1.0
-            prog["music_device"] = self._me_music_dev_var.get()
-        if mode == "http":
-            try:   prog["http_timeout"] = int(self._me_http_timeout_var.get())
-            except: prog["http_timeout"] = 3
-        bank     = self._me_bank_var.get()
-        pads_key = "pads" if bank == "A" else "pads_bank_b"
-        pads     = {}
-        for ns, var in self._me_pad_vars.items():
-            if mode == "obs":
-                act = var.get()
-                if not act: continue
-                sub_var = self._me_pad_sub_vars.get(ns)
-                d = {"action": act}
-                if sub_var and sub_var.get():
-                    sv = sub_var.get()
-                    if act in OBS_NEEDS_SCENE:    d["scene"]  = sv
-                    elif act in OBS_NEEDS_SOURCE: d["source"] = sv
-                    elif act == "hotkey":         d["hotkey"] = sv
-                pads[ns] = d
-            elif mode in ("sound_preset", "music"):
-                file_v = var.get()
-                if not file_v: continue
-                if file_v == "stop_all": pads[ns] = "stop_all"; continue
-                sub = self._me_pad_sub_vars.get(ns)
-                entry = {"file": file_v}
-                if sub:
-                    vol_var, loop_var = sub
-                    try:   entry["volume"] = float(vol_var.get())
-                    except: entry["volume"] = 1.0
-                    entry["loop"] = loop_var.get()
-                pads[ns] = entry
-            elif mode == "http":
-                url = var.get()
-                if not url: continue
-                sub = self._me_pad_sub_vars.get(ns)
-                entry = {"url": url}
-                if sub:
-                    method_var, body_var = sub
-                    entry["method"] = method_var.get() or "GET"
-                    body_str = body_var.get().strip()
-                    if body_str:
-                        try:   entry["body"] = json.loads(body_str)
-                        except: entry["body"] = body_str
-                pads[ns] = entry
-            else:
-                v = var.get()
-                if v: pads[ns] = v
-        existing = self.config["programs"].get(self._current_prog, {})
-        existing.update(prog)
-        existing[pads_key] = pads
-        knobs = {}
-        for cc, var in self._me_knob_vars.items():
-            v = var.get()
-            if v: knobs[cc] = v
-        existing["knobs"] = knobs
-        existing["pitchwheel"] = self._me_pitch_var.get()
-        existing["modwheel"]   = self._me_mod_var.get()
-        return existing
-
     def _me_save(self):
-        preset = self._me_collect_preset()
-        self.config["programs"][self._current_prog] = preset
+        key  = self._current_prog
+        prog = self.config["programs"].get(key, {})
+        prog["name"] = self._me_name_var.get().strip() or f"Preset {key}"
+        prog["mode"] = self._me_mode_var.get()
+        mode = prog["mode"]
+        if mode == "websocket":  prog["ws_url"]       = self._me_ws_url_var.get()
+        elif mode == "obs":
+            prog["obs_host"]     = self._me_obs_host_var.get()
+            prog["obs_port"]     = int(self._me_obs_port_var.get() or 4455)
+            prog["obs_password"] = self._me_obs_pass_var.get()
+        elif mode == "sound_preset": prog["sounds_dir"] = self._me_sounds_dir_var.get()
+        elif mode == "http":    prog["timeout"] = int(self._me_http_timeout_var.get() or 3)
+        elif mode == "music":
+            try: prog["volume"] = float(self._me_music_vol_var.get())
+            except ValueError: pass
+            prog["audio_device"] = self._me_music_dev_var.get()
+        prog["pitchwheel"] = self._me_pitch_var.get()
+        prog["modwheel"]   = self._me_mod_var.get()
+
+        # Pads
+        pads = {}
+        for ns, var in self._me_pad_vars.items():
+            val = var.get().strip()
+            if not val: continue
+            if ns in self._me_pad_sub_vars:
+                sub = self._me_pad_sub_vars[ns].get().strip()
+                if mode == "obs":
+                    entry = {"action": val}
+                    if val in OBS_NEEDS_SCENE:  entry["scene"]  = sub
+                    if val in OBS_NEEDS_SOURCE: entry["source"] = sub
+                    pads[ns] = entry
+                elif mode == "http":
+                    pads[ns] = {"method": val, "url": sub}
+                else:
+                    pads[ns] = val
+            else:
+                pads[ns] = val
+        prog["pads"] = pads
+
+        # Knobs
+        knobs = {}
+        for cs, var_tuple in self._me_knob_vars.items():
+            val = var_tuple[0].get().strip() if var_tuple else ""
+            if val: knobs[cs] = val
+        prog["knobs"] = knobs
+
+        self.config["programs"][key] = prog
         self._save_config()
-        self._build_prog_btns(); self._select_program(self._current_prog)
+        self._build_prog_btns()
+        self._select_program(key)
         self._me_save_indicator.config(text="✓ sauvegardé")
-        self.root.after(2000, lambda: self._me_save_indicator.config(text=""))
-        self._log(f"[SAVE] Preset {self._current_prog} sauvegardé")
-
-    def _me_new_preset(self):
-        keys   = list(self.config["programs"].keys())
-        new_key = str(max(int(k) for k in keys) + 1)
-        self.config["programs"][new_key] = {"mode": "debug", "name": f"Programme {new_key}", "pads": {}}
-        self._save_config()
-        self._current_prog = new_key
-        self._build_prog_btns(); self._select_program(new_key)
-        prog_keys   = list(self.config["programs"].keys())
-        prog_labels = [f"{k} — {self.config['programs'][k].get('name','')}" for k in prog_keys]
-        self._me_prog_map = dict(zip(prog_labels, prog_keys))
-        self._me_prog_cb.config(values=prog_labels)
-        for label, key in self._me_prog_map.items():
-            if key == new_key: self._me_prog_var.set(label); break
-        self._me_load_preset()
-        self._log(f"[NEW] Preset {new_key} créé")
-
-    def _me_delete_preset(self):
-        if len(self.config["programs"]) <= 1:
-            messagebox.showwarning("Supprimer", "Impossible — au moins un preset requis."); return
-        if not messagebox.askyesno("Supprimer",
-            f"Supprimer le preset {self._current_prog} ?"):
-            return
-        del self.config["programs"][self._current_prog]
-        self._save_config()
-        first = list(self.config["programs"].keys())[0]
-        self._current_prog = first
-        self._build_prog_btns(); self._select_program(first)
-        prog_keys   = list(self.config["programs"].keys())
-        prog_labels = [f"{k} — {self.config['programs'][k].get('name','')}" for k in prog_keys]
-        self._me_prog_map = dict(zip(prog_labels, prog_keys))
-        self._me_prog_cb.config(values=prog_labels)
-        for label, key in self._me_prog_map.items():
-            if key == first: self._me_prog_var.set(label); break
-        self._me_load_preset()
-        self._log(f"[DEL] Preset supprimé")
+        self.after_idle = self.root.after(2000, lambda: self._me_save_indicator.config(text=""))
+        self._log(f"[ME] Preset {key} sauvegardé")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
