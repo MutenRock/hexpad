@@ -1,300 +1,305 @@
-#!/usr/bin/env python3
 """
-HexPad — DisplayPanel v1.1
-Widget tkinter qui affiche texte / image / GIF animé.
-Les images et GIFs se redimensionnent automatiquement quand
-le canvas change de taille (bind <Configure>).
+display_panel.py — Widget panneau OLED AKAI MPK Mini MK3 pour HexPad GUI.
+
+Intègre :
+  - 8 champs de noms de knobs éditables (max 16 chars chacun)
+  - Champ nom de preset OLED (16 chars)
+  - Bouton ▶ Envoyer → construit le SysEx et l'envoie via mido
+  - Bouton ↺ Reset    → recharge les noms depuis le Mapping Editor
+  - Auto-remplissage depuis gui._me_knob_vars si disponible
+  - Indicateur de statut (✓ OK / ✗ ERR / ⚠ No MK3)
+  - Bouton « Copier SysEx » pour debug
+
+Usage dans gui.py :
+
+    from modules.display_panel import OLEDPanel
+    # Dans _build_test_tab ou un onglet dédié :
+    panel = OLEDPanel(parent_frame, self)
+    panel.pack(fill='both', expand=True)
 """
+from __future__ import annotations
+
+import threading
 import tkinter as tk
-import os
+from tkinter import ttk
 
 try:
-    from PIL import Image, ImageTk
-    PIL_OK = True
+    import mido
+    MIDO_OK = True
 except ImportError:
-    PIL_OK = False
+    MIDO_OK = False
+
+from modules.mpk_mini_mk3_display import (
+    build_display_sysex_data,
+    format_sysex,
+    KNOB_NAME_LENGTH,
+)
+
+_MAX_PRESET_NAME = 16
+_KNOB_COUNT = 8
 
 
-def _fit(img: "Image.Image", w: int, h: int) -> "Image.Image":
+class OLEDPanel(tk.Frame):
     """
-    Redimensionne img pour tenir dans (w, h) en conservant le ratio.
-    Utilise LANCZOS si disponible, sinon ANTIALIAS (Pillow < 10).
-    """
-    pad = 8
-    max_w, max_h = max(1, w - pad), max(1, h - pad)
-    iw, ih = img.size
-    if iw == 0 or ih == 0:
-        return img
-    scale = min(max_w / iw, max_h / ih)
-    new_w, new_h = max(1, int(iw * scale)), max(1, int(ih * scale))
-    resample = getattr(Image, "LANCZOS", getattr(Image, "ANTIALIAS", Image.BICUBIC))
-    return img.resize((new_w, new_h), resample)
-
-
-class DisplayPanel:
-    """
-    Panneau d'affichage multimédia avec auto-resize réactif.
-
-    Paramètres :
-      parent  — widget parent tkinter
-      bg      — couleur de fond par défaut
-      fg      — couleur de texte par défaut
-      root    — référence à la Tk root (pour .after)
+    Widget autonome — s'intègre dans n'importe quel Frame Tkinter.
+    `gui` est l'instance HexPadGUI ; seuls .C (thème) et
+    .device_var (StringVar du device MIDI) sont requis.
     """
 
-    def __init__(self, parent, bg="#111111", fg="#ffffff", root=None):
-        self.root  = root or parent.winfo_toplevel()
-        self.bg    = bg
-        self.fg    = fg
+    def __init__(self, parent: tk.Widget, gui, **kw) -> None:
+        C = gui.C
+        kw.setdefault("bg", C["bg"])
+        super().__init__(parent, **kw)
+        self._gui = gui
+        self._C   = C
+        self._knob_vars:   list[tk.StringVar] = [tk.StringVar(value=f"Knob {i+1}") for i in range(_KNOB_COUNT)]
+        self._preset_var:  tk.StringVar        = tk.StringVar(value="HEXPAD")
+        self._status_var:  tk.StringVar        = tk.StringVar(value="")
+        self._build()
 
-        # état courant (re-render à chaque resize)
-        self._cfg          = None   # dernière config show()
-        self._gif_src      = None   # Image PIL source du GIF (non redim)
-        self._gif_raw      = []     # frames PIL brutes (non redim)
-        self._gif_delays   = []
-        self._gif_frames   = []     # frames ImageTk dimensionnées au canvas
-        self._gif_idx      = 0
-        self._gif_job      = None
-        self._current_img  = None   # PhotoImage courante (GC guard)
-        self._resize_job   = None   # debounce resize
+    # ──────────────────────────────────────────────────────────────
+    # Construction UI
+    # ──────────────────────────────────────────────────────────────
+    def _build(self) -> None:
+        C = self._C
 
-        self.canvas = tk.Canvas(
-            parent,
-            bg=bg, highlightthickness=1, highlightbackground="#333333"
-        )
-        self.canvas.pack(fill="both", expand=True, padx=4, pady=4)
+        # ── Titre
+        hdr = tk.Frame(self, bg=C["panel"])
+        hdr.pack(fill="x")
+        tk.Label(hdr, text="◈ AKAI OLED — MPK Mini MK3",
+                 font=("Courier", 9, "bold"),
+                 fg=C["accent"], bg=C["panel"]).pack(side="left", padx=10, pady=6)
+        tk.Label(hdr,
+                 text="Envoie un preset RAM via SysEx",
+                 font=("Courier", 7), fg=C["dim"], bg=C["panel"]
+                 ).pack(side="left")
 
-        self.canvas.bind("<Configure>", self._on_resize)
-        self._draw_placeholder()
+        # ── Nom du preset
+        name_row = tk.Frame(self, bg=C["bg"])
+        name_row.pack(fill="x", padx=12, pady=(10, 4))
+        tk.Label(name_row, text="Nom preset (OLED)",
+                 font=("Courier", 8), fg=C["dim"], bg=C["bg"]).pack(side="left")
+        tk.Entry(name_row, textvariable=self._preset_var,
+                 bg=C["btn"], fg=C["accent"], font=("Courier", 9),
+                 relief="flat", width=18,
+                 insertbackground=C["accent"],
+                 validate="key",
+                 validatecommand=(
+                     self.register(lambda v: len(v) <= _MAX_PRESET_NAME), "%P")
+                 ).pack(side="left", padx=8)
+        tk.Label(name_row, text=f"max {_MAX_PRESET_NAME} car.",
+                 font=("Courier", 7), fg=C["dim"], bg=C["bg"]).pack(side="left")
 
-    # ── Taille courante ───────────────────────────────────────────────────────
+        # ── Séparateur
+        tk.Frame(self, bg=C["border"], height=1).pack(fill="x", padx=12, pady=4)
 
-    @property
-    def width(self) -> int:
-        w = self.canvas.winfo_width()
-        return w if w > 1 else 320
+        # ── Grille 4×2 des knobs
+        tk.Label(self, text="  NOMS DES KNOBS",
+                 font=("Courier", 7, "bold"),
+                 fg=C["accent2"], bg=C["bg"]).pack(anchor="w", padx=12)
+        grid = tk.Frame(self, bg=C["bg"])
+        grid.pack(fill="x", padx=12, pady=4)
+        for i in range(_KNOB_COUNT):
+            row, col = divmod(i, 4)
+            cell = tk.Frame(grid, bg=C["panel2"], padx=4, pady=4)
+            cell.grid(row=row, column=col, padx=3, pady=3, sticky="nsew")
+            grid.columnconfigure(col, weight=1)
+            tk.Label(cell,
+                     text=f"K{i+1}  CC{70+i}",
+                     font=("Courier", 7, "bold"),
+                     fg=C["accent"], bg=C["panel2"]).pack(anchor="w")
+            ent = tk.Entry(cell, textvariable=self._knob_vars[i],
+                           bg=C["btn"], fg=C["text"] if "text" in C else C["accent"],
+                           font=("Courier", 8), relief="flat", width=14,
+                           insertbackground=C["accent"],
+                           validate="key",
+                           validatecommand=(
+                               self.register(lambda v: len(v) <= KNOB_NAME_LENGTH), "%P")
+                           )
+            ent.pack(fill="x")
 
-    @property
-    def height(self) -> int:
-        h = self.canvas.winfo_height()
-        return h if h > 1 else 200
+        # ── Séparateur
+        tk.Frame(self, bg=C["border"], height=1).pack(fill="x", padx=12, pady=6)
 
-    # ── Public API ────────────────────────────────────────────────────────────
+        # ── Boutons d'action
+        btn_row = tk.Frame(self, bg=C["bg"])
+        btn_row.pack(fill="x", padx=12, pady=(0, 4))
 
-    def show(self, cfg: dict):
-        """Affiche le contenu décrit par cfg (type: text/image/gif/clear)."""
-        self._stop_gif()
-        self._cfg = cfg
-        t = cfg.get("type", "text")
-        if t == "clear":
-            self.clear()
-        elif t == "text":
-            self._render_text(cfg)
-        elif t == "image":
-            self._load_image(cfg)
-            self._render_image()
-        elif t == "gif":
-            self._load_gif(cfg)
-            self._render_gif_frame(restart=True)
+        tk.Button(btn_row, text="▶  Envoyer sur AKAI",
+                  font=("Courier", 9, "bold"),
+                  bg=C["accent"], fg=C["bg"],
+                  relief="flat", padx=12, pady=8,
+                  cursor="hand2",
+                  command=self._send).pack(side="left", padx=(0, 6))
 
-    def clear(self):
-        """Vide le panneau et réinitialise l'état."""
-        self._stop_gif()
-        self._cfg         = None
-        self._gif_src     = None
-        self._gif_raw     = []
-        self._gif_frames  = []
-        self._current_img = None
-        self.canvas.config(bg=self.bg)
-        self.canvas.delete("all")
-        self._draw_placeholder()
+        tk.Button(btn_row, text="↺  Auto-fill",
+                  font=("Courier", 8),
+                  bg=C["btn"], fg=C["dim"],
+                  relief="flat", padx=8, pady=8,
+                  cursor="hand2",
+                  command=self._autofill).pack(side="left", padx=(0, 6))
 
-    def set_bg(self, color: str):
-        self.bg = color
-        self.canvas.config(bg=color)
+        tk.Button(btn_row, text="⎘  Copier SysEx",
+                  font=("Courier", 8),
+                  bg=C["btn"], fg=C["dim"],
+                  relief="flat", padx=8, pady=8,
+                  cursor="hand2",
+                  command=self._copy_sysex).pack(side="left")
 
-    # ── Resize handler (debounced 80 ms) ──────────────────────────────────────
+        # ── Indicateur de statut
+        self._status_lbl = tk.Label(self, textvariable=self._status_var,
+                                    font=("Courier", 8),
+                                    fg=C["green"], bg=C["bg"],
+                                    anchor="w")
+        self._status_lbl.pack(fill="x", padx=14, pady=(2, 8))
 
-    def _on_resize(self, event=None):
-        if self._resize_job:
-            self.root.after_cancel(self._resize_job)
-        self._resize_job = self.root.after(80, self._do_resize)
+        # ── Log SysEx (collapsible)
+        tog_row = tk.Frame(self, bg=C["bg"])
+        tog_row.pack(fill="x", padx=12)
+        self._log_visible  = False
+        self._toggle_btn = tk.Button(
+            tog_row, text="▸ SysEx brut",
+            font=("Courier", 7, "bold"),
+            bg=C["bg"], fg=C["dim"],
+            relief="flat", padx=4, pady=2,
+            cursor="hand2", anchor="w",
+            command=self._toggle_log)
+        self._toggle_btn.pack(side="left")
+        self._log_frame = tk.Frame(self, bg=C["bg"])
+        from tkinter import scrolledtext
+        self._log_box = scrolledtext.ScrolledText(
+            self._log_frame,
+            bg=C["console_bg"], fg=C["console_fg"],
+            font=("Courier", 7), relief="flat", height=4,
+            insertbackground=C["accent"],
+            wrap="word",
+            state="disabled")
+        self._log_box.pack(fill="both", expand=True)
 
-    def _do_resize(self):
-        self._resize_job = None
-        if not self._cfg:
-            return
-        t = self._cfg.get("type", "text")
-        if t == "text":
-            self._render_text(self._cfg)
-        elif t == "image":
-            self._render_image()
-        elif t == "gif":
-            # re-scale toutes les frames et continuer l'anim
-            self._scale_gif_frames()
-
-    # ── Text ──────────────────────────────────────────────────────────────────
-
-    def _render_text(self, cfg: dict):
-        text   = cfg.get("content", "")
-        color  = cfg.get("color", self.fg)
-        size   = int(cfg.get("size", 28))
-        bold   = cfg.get("bold", True)
-        bg     = cfg.get("bg", self.bg)
-        weight = "bold" if bold else "normal"
-        self.canvas.config(bg=bg)
-        self.canvas.delete("all")
-        self.canvas.create_text(
-            self.width // 2, self.height // 2,
-            text=text,
-            fill=color,
-            font=("Courier", size, weight),
-            width=self.width - 16,
-            justify="center"
-        )
-
-    # ── Image ─────────────────────────────────────────────────────────────────
-
-    def _load_image(self, cfg: dict):
-        """Charge l'image source (non redimensionnée) en mémoire."""
-        self._img_src = None
-        if not PIL_OK:
-            return
-        path = cfg.get("content", "")
-        if not path or not os.path.isfile(path):
-            return
+    # ──────────────────────────────────────────────────────────────
+    # Logique
+    # ──────────────────────────────────────────────────────────────
+    def _get_device_name(self) -> str | None:
+        """Retourne le device MK3 si trouvé dans les sorties MIDI."""
+        if not MIDO_OK:
+            return None
         try:
-            img = Image.open(path)
-            self._img_src = img.convert("RGBA")
+            outputs = mido.get_output_names()
         except Exception:
-            pass
+            return None
+        # Préférer le device sélectionné dans la GUI
+        preferred = getattr(self._gui, "device_var", None)
+        if preferred:
+            name = preferred.get()
+            if name in outputs:
+                return name
+        # Sinon chercher AKAI/MPK parmi les sorties
+        for n in outputs:
+            if any(k in n.lower() for k in ("mpk", "mini", "akai")):
+                return n
+        return None
 
-    def _render_image(self):
-        """Redimensionne + affiche l'image source sur le canvas courant."""
-        cfg = self._cfg or {}
-        bg  = cfg.get("bg", self.bg)
-        self.canvas.config(bg=bg)
-        self.canvas.delete("all")
+    def _build_sysex(self) -> list[int]:
+        preset_name = self._preset_var.get().strip() or "HEXPAD"
+        knob_names  = [v.get().strip() or f"Knob {i+1}" for i, v in enumerate(self._knob_vars)]
+        return build_display_sysex_data(preset_name, knob_names)
 
-        if not PIL_OK:
-            self._show_error("pip install Pillow\npour les images")
+    def _send(self) -> None:
+        """Envoie le preset SysEx sur le port MIDI AKAI (thread)."""
+        def do():
+            device = self._get_device_name()
+            if device is None:
+                self._set_status("⚠ Aucun device AKAI/MPK trouvé", error=True)
+                return
+            try:
+                sysex_data = self._build_sysex()
+                self._append_log(format_sysex(sysex_data))
+                with mido.open_output(device) as port:
+                    msg = mido.Message("sysex", data=sysex_data)
+                    port.send(msg)
+                self._set_status(f"✓ Envoyé sur {device}", error=False)
+            except Exception as exc:
+                self._set_status(f"✗ Erreur : {exc}", error=True)
+        threading.Thread(target=do, daemon=True).start()
+
+    def _autofill(self) -> None:
+        """
+        Copie les noms de knobs depuis le Mapping Editor (gui._me_knob_vars)
+        si disponible, sinon depuis les labels du preset courant.
+        """
+        gui = self._gui
+
+        # Depuis le Mapping Editor ouvert
+        if hasattr(gui, "_me_knob_vars") and gui._me_knob_vars:
+            for i, (cc, var_tuple) in enumerate(gui._me_knob_vars.items()):
+                if i >= _KNOB_COUNT:
+                    break
+                # var_tuple = (action_var,) ou (label_var, ...) selon implémentation
+                # On tente d'extraire un label lisible
+                label = f"CC{cc}"
+                if isinstance(var_tuple, (list, tuple)) and len(var_tuple) > 0:
+                    try:
+                        label = var_tuple[0].get()[:KNOB_NAME_LENGTH] or label
+                    except Exception:
+                        pass
+                elif hasattr(var_tuple, "get"):
+                    try:
+                        label = var_tuple.get()[:KNOB_NAME_LENGTH] or label
+                    except Exception:
+                        pass
+                self._knob_vars[i].set(label)
+            self._set_status("↺ Noms chargés depuis le Mapping Editor", error=False)
             return
-        src = getattr(self, "_img_src", None)
-        if src is None:
-            path = cfg.get("content", "")
-            self._show_error(
-                f"Image introuvable :\n{path}" if path else "Chemin vide"
-            )
-            return
+
+        # Depuis le preset courant
+        if hasattr(gui, "_get_current_preset"):
+            prog = gui._get_current_preset() or {}
+            knobs = prog.get("knobs", {})
+            for i in range(_KNOB_COUNT):
+                cc  = 70 + i
+                raw = knobs.get(str(cc), {})
+                label = (raw.get("label", "") if isinstance(raw, dict) else "") or f"Knob {i+1}"
+                self._knob_vars[i].set(label[:KNOB_NAME_LENGTH])
+            preset_name = prog.get("name", "HEXPAD")[:_MAX_PRESET_NAME]
+            self._preset_var.set(preset_name)
+            self._set_status("↺ Noms chargés depuis le preset", error=False)
+
+    def _copy_sysex(self) -> None:
         try:
-            fitted = _fit(src, self.width, self.height)
-            photo  = ImageTk.PhotoImage(fitted)
-            self._current_img = photo
-            self.canvas.create_image(
-                self.width // 2, self.height // 2,
-                image=photo, anchor="center"
-            )
-        except Exception as e:
-            self._show_error(str(e))
+            sysex_data = self._build_sysex()
+            txt = format_sysex(sysex_data)
+            self.clipboard_clear()
+            self.clipboard_append(txt)
+            self._set_status("⎘ SysEx copié dans le presse-papiers", error=False)
+            self._append_log(txt)
+            if not self._log_visible:
+                self._toggle_log()
+        except Exception as exc:
+            self._set_status(f"✗ {exc}", error=True)
 
-    # ── GIF ───────────────────────────────────────────────────────────────────
+    # ──────────────────────────────────────────────────────────────
+    # Helpers UI
+    # ──────────────────────────────────────────────────────────────
+    def _set_status(self, msg: str, error: bool = False) -> None:
+        color = self._C.get("red", "#ff5555") if error else self._C.get("green", "#50fa7b")
+        self.after(0, lambda: (
+            self._status_var.set(msg),
+            self._status_lbl.config(fg=color)
+        ))
 
-    def _load_gif(self, cfg: dict):
-        """Charge toutes les frames PIL brutes (non redim) en mémoire."""
-        self._gif_raw    = []
-        self._gif_delays = []
-        self._gif_frames = []
-        if not PIL_OK:
-            return
-        path  = cfg.get("content", "")
-        speed = int(cfg.get("speed", 50))
-        if not path or not os.path.isfile(path):
-            return
-        try:
-            gif = Image.open(path)
-            while True:
-                self._gif_raw.append(gif.copy().convert("RGBA"))
-                delay = gif.info.get("duration", speed)
-                self._gif_delays.append(max(20, delay))
-                gif.seek(gif.tell() + 1)
-        except EOFError:
-            pass
-        except Exception:
-            pass
-        self._scale_gif_frames()
+    def _append_log(self, msg: str) -> None:
+        def do():
+            self._log_box.config(state="normal")
+            self._log_box.insert("end", msg + "\n")
+            self._log_box.see("end")
+            self._log_box.config(state="disabled")
+        self.after(0, do)
 
-    def _scale_gif_frames(self):
-        """Re-scale toutes les frames brutes à la taille courante du canvas."""
-        if not self._gif_raw:
-            return
-        w, h = self.width, self.height
-        self._gif_frames = [
-            ImageTk.PhotoImage(_fit(frame, w, h))
-            for frame in self._gif_raw
-        ]
-
-    def _render_gif_frame(self, restart: bool = False):
-        """Affiche (ou repart de) la première frame et lance l'animation."""
-        cfg = self._cfg or {}
-        bg  = cfg.get("bg", self.bg)
-        self.canvas.config(bg=bg)
-        self.canvas.delete("all")
-
-        if not PIL_OK:
-            self._show_error("pip install Pillow\npour les GIFs")
-            return
-        if not self._gif_frames:
-            path = cfg.get("content", "")
-            self._show_error(
-                f"GIF introuvable :\n{path}" if path else "Chemin vide"
-            )
-            return
-
-        if restart:
-            self._gif_idx = 0
-
-        self._gif_image_item = self.canvas.create_image(
-            self.width // 2, self.height // 2,
-            image=self._gif_frames[0],
-            anchor="center"
-        )
-        self._stop_gif()
-        self._animate_gif()
-
-    def _animate_gif(self):
-        if not self._gif_frames:
-            return
-        idx = self._gif_idx % len(self._gif_frames)
-        try:
-            self.canvas.itemconfig(self._gif_image_item, image=self._gif_frames[idx])
-        except tk.TclError:
-            return  # canvas détruit
-        delay = self._gif_delays[idx] if self._gif_delays else 50
-        self._gif_idx += 1
-        self._gif_job = self.root.after(delay, self._animate_gif)
-
-    def _stop_gif(self):
-        if self._gif_job:
-            self.root.after_cancel(self._gif_job)
-            self._gif_job = None
-
-    # ── Helpers ───────────────────────────────────────────────────────────────
-
-    def _draw_placeholder(self):
-        self.canvas.create_text(
-            self.width // 2, self.height // 2,
-            text="\u2b21  DISPLAY",
-            fill="#333333",
-            font=("Courier", 14, "bold")
-        )
-
-    def _show_error(self, msg: str):
-        self.canvas.delete("all")
-        self.canvas.create_text(
-            self.width // 2, self.height // 2,
-            text=f"\u26a0\ufe0f\n{msg}",
-            fill="#ff4444",
-            font=("Courier", 11),
-            width=self.width - 16,
-            justify="center"
-        )
+    def _toggle_log(self) -> None:
+        self._log_visible = not self._log_visible
+        if self._log_visible:
+            self._log_frame.pack(fill="both", expand=True, padx=12, pady=(0, 8))
+            self._toggle_btn.config(text="▾ SysEx brut")
+        else:
+            self._log_frame.pack_forget()
+            self._toggle_btn.config(text="▸ SysEx brut")
