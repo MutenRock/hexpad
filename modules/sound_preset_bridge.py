@@ -22,15 +22,37 @@ import os
 
 try:
     import pygame
-    pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512)
     PYGAME_OK = True
-    print("[SOUND] pygame.mixer initialise")
 except ImportError:
     PYGAME_OK = False
     print("[SOUND] pygame manquant — pip install pygame")
-except Exception as e:
-    PYGAME_OK = False
-    print(f"[SOUND] pygame erreur init : {e}")
+
+# NOTE: pygame.mixer.init() est intentionnellement PAS appelé ici.
+# L'init est lazy : elle n'a lieu que dans SoundPresetBridge.__init__()
+# quand le mode sound_preset est réellement activé. Cela évite
+# l'erreur Windows "Le chemin d'accès spécifié est introuvable"
+# levée par pygame 2.6.x quand aucun device audio n'est disponible
+# au moment de l'import du module.
+
+_mixer_ready = False
+
+
+def _ensure_mixer():
+    """Init pygame.mixer une seule fois, uniquement à la demande."""
+    global _mixer_ready
+    if _mixer_ready:
+        return True
+    if not PYGAME_OK:
+        return False
+    try:
+        if not pygame.mixer.get_init():
+            pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512)
+        _mixer_ready = True
+        print("[SOUND] pygame.mixer initialise")
+        return True
+    except Exception as e:
+        print(f"[SOUND] pygame.mixer erreur init : {e}")
+        return False
 
 
 class SoundPresetBridge:
@@ -39,7 +61,7 @@ class SoundPresetBridge:
         self.sounds_dir = config.get("sounds_dir", "sounds")
         self.sounds     = {}   # note_str -> (Sound, loop)
         self.channels   = {}   # note_str -> Channel
-        if PYGAME_OK:
+        if _ensure_mixer():
             self._preload()
 
     def _preload(self):
@@ -63,7 +85,7 @@ class SoundPresetBridge:
                 print(f"[SOUND] Erreur '{fname}' : {e}")
 
     def handle(self, msg):
-        if not PYGAME_OK:
+        if not _mixer_ready:
             return
         key = str(msg.note)
         if msg.type == "note_on" and msg.velocity > 0:

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-HexPad Music Bridge v1.7.1
+HexPad Music Bridge v1.7.2
 Mode "music" : sampler haute qualité avec sélecteur de sortie audio.
 
 Différences vs SoundPresetBridge :
@@ -34,14 +34,18 @@ except ImportError:
     SD_OK = False
     print("[MUSIC] sounddevice manquant — pip install sounddevice")
 
-# ── pygame (moteur audio) ──────────────────────────────────────────
+# ── pygame (moteur audio) — import seulement, PAS d'init ici ─────────────────
+# L'init est lazy dans MusicBridge._init_mixer() pour éviter
+# l'erreur Windows "Le chemin d'accès spécifié est introuvable"
+# levée par pygame 2.6.x quand le device audio est indisponible à l'import.
 try:
     import pygame
-    _mixer_init = False
     PYGAME_OK = True
 except ImportError:
     PYGAME_OK = False
     print("[MUSIC] pygame manquant — pip install pygame")
+
+_mixer_init = False
 
 
 def list_output_devices():
@@ -89,6 +93,8 @@ class MusicBridge:
 
     def _init_mixer(self):
         global _mixer_init
+        if _mixer_init:
+            return
         try:
             if not pygame.mixer.get_init():
                 pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512)
@@ -96,10 +102,13 @@ class MusicBridge:
             print(f"[MUSIC] pygame.mixer initialisé  device='{self.device or 'défaut'}'")
         except Exception as e:
             print(f"[MUSIC] pygame.mixer erreur : {e}")
+            _mixer_init = False
 
     # ── Preload ─────────────────────────────────────────────────────────────
 
     def _preload(self):
+        if not _mixer_init:
+            return
         os.makedirs(self.sounds_dir, exist_ok=True)
         for note, cfg in self.pads.items():
             fname  = cfg if isinstance(cfg, str) else cfg.get("file", "")
